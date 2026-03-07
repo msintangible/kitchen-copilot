@@ -1,4 +1,3 @@
-
 import os
 import httpx
 from dotenv import load_dotenv
@@ -77,6 +76,108 @@ search_recipes_tool = types.Tool(
     ]
 )
 
+timer_tool = types.Tool(
+    function_declarations=[
+        types.FunctionDeclaration(
+            name="set_cooking_timer",
+            description=(
+                "Set a timer for a cooking step. Use this when the user wants to set a timer "
+                "for a specific cooking task like 'boil pasta for 10 minutes' or 'bake chicken for 25 minutes'. "
+                "Returns the timer ID for later reference."
+            ),
+            parameters=types.Schema(
+                type=types.Type.OBJECT,
+                properties={
+                    "name": types.Schema(
+                        type=types.Type.STRING,
+                        description="Descriptive name for the timer (e.g., 'Boil pasta', 'Bake chicken')"
+                    ),
+                    "minutes": types.Schema(
+                        type=types.Type.INTEGER,
+                        description="Duration in minutes for the timer"
+                    ),
+                },
+                required=["name", "minutes"]
+            )
+        ),
+        types.FunctionDeclaration(
+            name="start_timer",
+            description=(
+                "Start a previously created timer. Use this when the user wants to begin timing a cooking step."
+            ),
+            parameters=types.Schema(
+                type=types.Type.OBJECT,
+                properties={
+                    "timer_id": types.Schema(
+                        type=types.Type.STRING,
+                        description="The ID of the timer to start"
+                    ),
+                },
+                required=["timer_id"]
+            )
+        ),
+        types.FunctionDeclaration(
+            name="pause_timer",
+            description=(
+                "Pause a running timer. Use this when the user needs to temporarily stop timing."
+            ),
+            parameters=types.Schema(
+                type=types.Type.OBJECT,
+                properties={
+                    "timer_id": types.Schema(
+                        type=types.Type.STRING,
+                        description="The ID of the timer to pause"
+                    ),
+                },
+                required=["timer_id"]
+            )
+        ),
+        types.FunctionDeclaration(
+            name="stop_timer",
+            description=(
+                "Stop and reset a timer completely. Use this when the user wants to cancel a timer."
+            ),
+            parameters=types.Schema(
+                type=types.Type.OBJECT,
+                properties={
+                    "timer_id": types.Schema(
+                        type=types.Type.STRING,
+                        description="The ID of the timer to stop"
+                    ),
+                },
+                required=["timer_id"]
+            )
+        ),
+        types.FunctionDeclaration(
+            name="get_timer_status",
+            description=(
+                "Check the status of a specific timer. Use this when the user asks about a timer's progress."
+            ),
+            parameters=types.Schema(
+                type=types.Type.OBJECT,
+                properties={
+                    "timer_id": types.Schema(
+                        type=types.Type.STRING,
+                        description="The ID of the timer to check"
+                    ),
+                },
+                required=["timer_id"]
+            )
+        ),
+        types.FunctionDeclaration(
+            name="list_all_timers",
+            description=(
+                "Get the status of all active timers. Use this when the user wants to see all their current timers."
+            ),
+            parameters=types.Schema(
+                type=types.Type.OBJECT,
+                properties={},
+                required=[]
+            )
+        ),
+    ]
+)
+
 
 # ── Tool Handler ──────────────────────────────────────────────────
 
@@ -110,10 +211,151 @@ async def handle_search_recipes(ingredients: list) -> dict:
         return {"error": str(e), "recipes": []}
 
 
+async def handle_set_cooking_timer(name: str, minutes: int) -> dict:
+    """Create a new cooking timer"""
+    print(f"\n  ⏰ set_cooking_timer called: '{name}' for {minutes} minutes")
+
+    try:
+        timer_id = timer_manager.create_timer(name, minutes)
+        print(f"  ✓ Created timer '{name}' ({minutes} min) with ID: {timer_id}")
+        return {
+            "timer_id": timer_id,
+            "name": name,
+            "minutes": minutes,
+            "status": "created",
+            "message": f"Timer '{name}' set for {minutes} minutes. Use start_timer to begin."
+        }
+    except Exception as e:
+        print(f"  ✗ Timer creation error: {e}")
+        return {"error": str(e)}
+
+
+async def handle_start_timer(timer_id: str) -> dict:
+    """Start a timer"""
+    print(f"\n  ▶️ start_timer called for: {timer_id}")
+
+    try:
+        success = timer_manager.start_timer(timer_id)
+        if success:
+            timer_status = timer_manager.get_timer_status(timer_id)
+            print(f"  ✓ Started timer: {timer_status['name']}")
+            return {
+                "timer_id": timer_id,
+                "status": "started",
+                "message": f"Timer '{timer_status['name']}' is now running for {timer_status['total_seconds'] // 60} minutes."
+            }
+        else:
+            return {"error": f"Could not start timer {timer_id}. It may not exist or is already running."}
+    except Exception as e:
+        print(f"  ✗ Timer start error: {e}")
+        return {"error": str(e)}
+
+
+async def handle_pause_timer(timer_id: str) -> dict:
+    """Pause a timer"""
+    print(f"\n  ⏸️ pause_timer called for: {timer_id}")
+
+    try:
+        success = timer_manager.pause_timer(timer_id)
+        if success:
+            timer_status = timer_manager.get_timer_status(timer_id)
+            remaining_min = timer_status['remaining_seconds'] // 60
+            print(f"  ✓ Paused timer: {timer_status['name']} ({remaining_min} min remaining)")
+            return {
+                "timer_id": timer_id,
+                "status": "paused",
+                "remaining_minutes": remaining_min,
+                "message": f"Timer '{timer_status['name']}' paused with {remaining_min} minutes remaining."
+            }
+        else:
+            return {"error": f"Could not pause timer {timer_id}. It may not exist or is not running."}
+    except Exception as e:
+        print(f"  ✗ Timer pause error: {e}")
+        return {"error": str(e)}
+
+
+async def handle_stop_timer(timer_id: str) -> dict:
+    """Stop a timer"""
+    print(f"\n  ⏹️ stop_timer called for: {timer_id}")
+
+    try:
+        success = timer_manager.stop_timer(timer_id)
+        if success:
+            print(f"  ✓ Stopped timer: {timer_id}")
+            return {
+                "timer_id": timer_id,
+                "status": "stopped",
+                "message": f"Timer {timer_id} has been stopped and reset."
+            }
+        else:
+            return {"error": f"Could not stop timer {timer_id}. It may not exist."}
+    except Exception as e:
+        print(f"  ✗ Timer stop error: {e}")
+        return {"error": str(e)}
+
+
+async def handle_get_timer_status(timer_id: str) -> dict:
+    """Get status of a specific timer"""
+    print(f"\n  📊 get_timer_status called for: {timer_id}")
+
+    try:
+        timer_status = timer_manager.get_timer_status(timer_id)
+        if timer_status:
+            remaining_min = timer_status['remaining_seconds'] // 60
+            progress_pct = round(timer_status['progress_percentage'], 1)
+
+            status_msg = f"Timer '{timer_status['name']}' is {timer_status['status']}"
+            if timer_status['status'] == 'running':
+                status_msg += f" with {remaining_min} minutes remaining ({progress_pct}% complete)"
+            elif timer_status['status'] == 'paused':
+                status_msg += f" (paused with {remaining_min} minutes remaining)"
+            elif timer_status['status'] == 'completed':
+                status_msg += " (finished!)"
+
+            print(f"  ✓ {status_msg}")
+            return {
+                "timer_id": timer_id,
+                **timer_status,
+                "message": status_msg
+            }
+        else:
+            return {"error": f"Timer {timer_id} not found."}
+    except Exception as e:
+        print(f"  ✗ Timer status error: {e}")
+        return {"error": str(e)}
+
+
+async def handle_list_all_timers() -> dict:
+    """Get status of all timers"""
+    print(f"\n  📋 list_all_timers called")
+
+    try:
+        timers = timer_manager.get_all_timers()
+        print(f"  ✓ Found {len(timers)} timers")
+
+        # Clean up old completed timers
+        timer_manager.cleanup_completed_timers()
+
+        return {
+            "timers": timers,
+            "count": len(timers),
+            "message": f"You have {len(timers)} active timers."
+        }
+    except Exception as e:
+        print(f"  ✗ List timers error: {e}")
+        return {"error": str(e), "timers": []}
+
+
 # ── Tool Router ───────────────────────────────────────────────────
 
 TOOL_HANDLERS = {
     "search_recipes": handle_search_recipes,
+    "set_cooking_timer": handle_set_cooking_timer,
+    "start_timer": handle_start_timer,
+    "pause_timer": handle_pause_timer,
+    "stop_timer": handle_stop_timer,
+    "get_timer_status": handle_get_timer_status,
+    "list_all_timers": handle_list_all_timers,
 }
 
 
@@ -129,7 +371,10 @@ if __name__ == "__main__":
     import asyncio
 
     async def test():
-        print("Testing Spoonacular connection...\n")
+        print("Testing Kitchen Copilot Tools...\n")
+
+        # Test recipe search
+        print("=== Testing Recipe Search ===")
         result = await handle_tool_call(
             "search_recipes",
             {"ingredients": ["pasta", "garlic", "eggs", "parmesan"]}
@@ -139,5 +384,37 @@ if __name__ == "__main__":
             print(f"  - {r['name']} ({r['match_percentage']}% match)")
             if r['missing_ingredients']:
                 print(f"    Missing: {', '.join(r['missing_ingredients'])}")
+
+        print("\n=== Testing Timer Functionality ===")
+
+        # Test timer creation
+        timer_result = await handle_tool_call(
+            "set_cooking_timer",
+            {"name": "Boil pasta", "minutes": 10}
+        )
+        timer_id = timer_result.get("timer_id")
+        print(f"Created timer: {timer_result.get('message')}")
+
+        # Test starting timer
+        if timer_id:
+            start_result = await handle_tool_call("start_timer", {"timer_id": timer_id})
+            print(f"Started timer: {start_result.get('message')}")
+
+            # Wait a few seconds
+            await asyncio.sleep(3)
+
+            # Check timer status
+            status_result = await handle_tool_call("get_timer_status", {"timer_id": timer_id})
+            print(f"Timer status: {status_result.get('message')}")
+
+            # Test pausing
+            pause_result = await handle_tool_call("pause_timer", {"timer_id": timer_id})
+            print(f"Paused timer: {pause_result.get('message')}")
+
+        # Test listing all timers
+        list_result = await handle_tool_call("list_all_timers", {})
+        print(f"\nAll timers: {list_result.get('message')}")
+        for timer in list_result.get("timers", []):
+            print(f"  - {timer['name']}: {timer['status']} ({timer['remaining_seconds']//60} min left)")
 
     asyncio.run(test())
