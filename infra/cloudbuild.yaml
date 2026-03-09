@@ -1,0 +1,19 @@
+steps:
+	- name: 'gcr.io/cloud-builders/docker'
+		args: ['build', '-t', 'us-central1-docker.pkg.dev/$PROJECT_ID/kitchen-copilot/backend:$COMMIT_SHA', '-f', 'infra/Dockerfile', '.']
+
+	- name: 'gcr.io/cloud-builders/docker'
+		args: ['push', 'us-central1-docker.pkg.dev/$PROJECT_ID/kitchen-copilot/backend:$COMMIT_SHA']
+
+	- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+		args:
+			- 'gcloud'
+			- 'run'
+			- 'deploy'
+			- 'kitchen-copilot'
+			- '--image=us-central1-docker.pkg.dev/$PROJECT_ID/kitchen-copilot/backend:$COMMIT_SHA'
+			- '--region=us-central1'
+			- '--platform=managed
+
+images:
+       - 'us-central1-docker.pkg.dev/$PROJECT_ID/kitchen-copilot/backend:$COMMIT_SHA'
