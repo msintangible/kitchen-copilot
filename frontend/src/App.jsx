@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Camera, Mic, Play, Pause, Square, Flame, CheckCircle2, ChevronRight, Timer as TimerIcon } from 'lucide-react';
+import { Camera, Mic, MicOff, Play, Pause, Square, Flame, CheckCircle2, ChevronRight, Timer as TimerIcon } from 'lucide-react';
 import { useMediaCapture } from './hooks/useMediaCapture';
 import { useCopilotWebSocket } from './hooks/useCopilotWebSocket';
 import { RecipeSidebar } from './components/RecipeSidebar';
@@ -10,7 +10,7 @@ import './App.css';
 const WS_URL = 'ws://localhost:8000/ws';
 
 function App() {
-  const { videoRef, isCapturing, startCapture, stopCapture } = useMediaCapture();
+  const { videoRef, isCapturing, isMuted, startCapture, stopCapture, toggleMute } = useMediaCapture();
   const { isConnected, sessionState, connect, disconnect } = useCopilotWebSocket(WS_URL);
   
   const [isActive, setIsActive] = useState(false);
@@ -154,8 +154,12 @@ function App() {
         </button>
         
         {isActive && (
-          <button className="btn-icon">
-            <Mic size={20} />
+          <button 
+            className={`btn-icon transition-all duration-300 ${isMuted ? 'bg-red-500/20 text-red-400 hover:bg-red-500/30 border-red-500/30 shadow-[0_0_15px_rgba(239,68,68,0.2)]' : 'hover:bg-white/10'}`}
+            onClick={toggleMute}
+            title={isMuted ? "Unmute Microphone" : "Mute Microphone"}
+          >
+            {isMuted ? <MicOff size={20} /> : <Mic size={20} />}
           </button>
         )}
       </div>

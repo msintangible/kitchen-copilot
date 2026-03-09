@@ -9,6 +9,7 @@ export function useMediaCapture() {
   const [stream, setStream] = useState(null);
   const [error, setError] = useState(null);
   const [isCapturing, setIsCapturing] = useState(false);
+  const [isMuted, setIsMuted] = useState(false);
   const videoRef = useRef(null);
   
   // Audio Refs
@@ -63,6 +64,7 @@ export function useMediaCapture() {
       audioProcessorRef.current = processor;
       
       setIsCapturing(true);
+      setIsMuted(false);
       isCapturingRef.current = true;
     } catch (err) {
       console.error("Error accessing media devices.", err);
@@ -89,6 +91,7 @@ export function useMediaCapture() {
       }
     }
     setIsCapturing(false);
+    setIsMuted(false);
   }, [stream]);
 
   // Cleanup on unmount
@@ -129,12 +132,25 @@ export function useMediaCapture() {
     };
   }, [isCapturing]);
 
+  const toggleMute = useCallback(() => {
+    if (stream) {
+      const audioTracks = stream.getAudioTracks();
+      const nextMutedState = !isMuted;
+      audioTracks.forEach(track => {
+        track.enabled = !nextMutedState;
+      });
+      setIsMuted(nextMutedState);
+    }
+  }, [stream, isMuted]);
+
   return {
     stream,
     videoRef,
     isCapturing,
+    isMuted,
     error,
     startCapture,
-    stopCapture
+    stopCapture,
+    toggleMute
   };
 }
