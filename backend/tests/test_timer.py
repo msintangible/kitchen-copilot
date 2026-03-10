@@ -6,7 +6,7 @@ import os
 # Add the current directory to the path so we can import timer
 sys.path.insert(0, os.path.dirname(__file__))
 
-from timer import timer_manager, set_timer, start_timer, get_timers
+from Backend.services.timer import set_timer, start_timer, get_timers
 
 async def test_timers():
     print("🧪 Testing Kitchen Timer System...\n")

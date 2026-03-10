@@ -32,7 +32,7 @@ Things you never do:
 """
 
 print(types.LiveConnectConfig.model_fields.keys())
-async def main():
+async def run_gemini_session():
     print("Opening Live session...")
 
     async with client.aio.live.connect(
