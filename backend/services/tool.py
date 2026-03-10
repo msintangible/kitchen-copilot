@@ -3,6 +3,7 @@ import httpx
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
+from backend.services.timer import timer_manager
 
 load_dotenv()
 

@@ -62,4 +62,3 @@ async def run_gemini_session():
 
     print("✓ Done")
 
-asyncio.run(main())

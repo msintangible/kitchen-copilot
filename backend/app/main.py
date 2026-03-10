@@ -12,8 +12,8 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from routes.session import router as session_router
-from routes.websocket import router as websocket_router
+from endpoints.session import router as session_router
+from endpoints.websocket import router as websocket_router
 
 logging.basicConfig(
     level=logging.INFO,
