@@ -20,3 +20,5 @@ venv/
 # OS
 .DS_Store
 Thumbs.db
+# Ignore Project Plan
+Kitchen Copilot Project Plan.md
