@@ -14,11 +14,33 @@ export function useCopilotWebSocket(url) {
   const playbackContextRef = useRef(null);
   const nextPlayTimeRef = useRef(0);
 
-  const connect = useCallback(() => {
+  const connect = useCallback(async () => {
     if (wsRef.current?.readyState === WebSocket.OPEN) return;
 
     try {
-      const ws = new WebSocket(url);
+      // Initialize playback audio context immediately on user interaction
+      // (Browsers auto-suspend AudioContexts if created inside async callbacks)
+      if (!playbackContextRef.current) {
+        playbackContextRef.current = new (window.AudioContext || window.webkitAudioContext)({
+          sampleRate: 24000 // Gemini returns 24kHz audio typically
+        });
+        nextPlayTimeRef.current = playbackContextRef.current.currentTime;
+      } else if (playbackContextRef.current.state === 'suspended') {
+        playbackContextRef.current.resume();
+      }
+
+      // Step 1: Pre-flight auth to get one-time token
+      // Derive HTTP url from WS url (ws://localhost:8000/ws -> http://localhost:8000/session/token)
+      const httpUrl = url.replace('ws://', 'http://').replace('wss://', 'https://').replace('/ws', '/session/token');
+      const res = await fetch(httpUrl, { method: 'POST' });
+      if (!res.ok) throw new Error("Failed to get session token");
+      const { token, session_id } = await res.json();
+      
+      console.log(`Secured session: ${session_id}`);
+
+      // Step 2: Connect with token
+      const wsUrlWithToken = `${url}?token=${token}`;
+      const ws = new WebSocket(wsUrlWithToken);
       
       // We expect binary data from the server (either PCM audio or JSON as text blocks)
       ws.binaryType = 'arraybuffer';
@@ -26,14 +48,6 @@ export function useCopilotWebSocket(url) {
       ws.onopen = () => {
         console.log("Connected to Copilot Backend");
         setIsConnected(true);
-        
-        // Initialize playback audio context (must be after user interaction typically)
-        if (!playbackContextRef.current) {
-          playbackContextRef.current = new (window.AudioContext || window.webkitAudioContext)({
-            sampleRate: 24000 // Gemini returns 24kHz audio typically
-          });
-          nextPlayTimeRef.current = playbackContextRef.current.currentTime;
-        }
       };
 
       ws.onclose = () => {
@@ -45,17 +59,21 @@ export function useCopilotWebSocket(url) {
         console.error("WebSocket Error:", err);
       };
 
+      let inChunkCount = 0;
       ws.onmessage = (event) => {
         // Handle incoming data
         if (typeof event.data === 'string') {
           try {
             const data = JSON.parse(event.data);
+            console.log("Copilot State Update:", data);
             setSessionState(data);
           } catch (e) {
-            console.error("Failed to parse incoming JSON", e);
+            console.error("Failed to parse websocket message", e);
           }
         } else if (event.data instanceof ArrayBuffer) {
-          // Play incoming audio chunks directly
+          // It's raw PCM audio from Gemini (Int16)
+          inChunkCount++;
+          if (inChunkCount % 20 === 0) console.log(`[Audio In] Received ${event.data.byteLength} bytes from Gemini (x${inChunkCount})`);
           playAudioChunk(new Int16Array(event.data));
         }
       };
@@ -63,14 +81,17 @@ export function useCopilotWebSocket(url) {
       wsRef.current = ws;
 
     // Listeners for outgoing captures
+    let outChunkCount = 0;
     const handleAudioChunk = (e) => {
       if (wsRef.current?.readyState !== WebSocket.OPEN) return;
       const float32Array = e.detail;
       
       // Convert Float32 (-1.0 to 1.0) to Int16 (-32768 to 32767)
       const int16Array = new Int16Array(float32Array.length);
+      let maxVol = 0;
       for (let i = 0; i < float32Array.length; i++) {
         const s = Math.max(-1, Math.min(1, float32Array[i]));
+        if (Math.abs(s) > maxVol) maxVol = Math.abs(s);
         int16Array[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
       }
       
@@ -79,6 +100,10 @@ export function useCopilotWebSocket(url) {
       buffer[0] = 0x00;
       buffer.set(new Uint8Array(int16Array.buffer), 1);
       
+      outChunkCount++;
+      if (outChunkCount % 50 === 0) {
+        console.log(`[Audio Out] Vol: ${maxVol.toFixed(4)}, size: ${buffer.byteLength} bytes (x${outChunkCount})`);
+      }
       wsRef.current.send(buffer);
     };
 

@@ -1,4 +1,4 @@
-import os
+﻿import os
 import httpx
 from dotenv import load_dotenv
 from google import genai
@@ -6,6 +6,7 @@ from google.genai import types
 from backend.services.timer import timer_manager
 
 load_dotenv()
+from backend.services.timer import timer_manager
 
 
 client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
@@ -204,7 +205,7 @@ async def handle_search_recipes(ingredients: list) -> dict:
                 "image": r.get("image", "")
             })
 
-        print(f"  ✓ Found {len(recipes)} recipes from Spoonacular")
+        print(f"  OK Found {len(recipes)} recipes from Spoonacular")
         return {"recipes": recipes}
 
     except Exception as e:
@@ -218,7 +219,7 @@ async def handle_set_cooking_timer(name: str, minutes: int) -> dict:
 
     try:
         timer_id = timer_manager.create_timer(name, minutes)
-        print(f"  ✓ Created timer '{name}' ({minutes} min) with ID: {timer_id}")
+        print(f"  OK Created timer '{name}' ({minutes} min) with ID: {timer_id}")
         return {
             "timer_id": timer_id,
             "name": name,
@@ -239,7 +240,7 @@ async def handle_start_timer(timer_id: str) -> dict:
         success = timer_manager.start_timer(timer_id)
         if success:
             timer_status = timer_manager.get_timer_status(timer_id)
-            print(f"  ✓ Started timer: {timer_status['name']}")
+            print(f"  OK Started timer: {timer_status['name']}")
             return {
                 "timer_id": timer_id,
                 "status": "started",
@@ -261,7 +262,7 @@ async def handle_pause_timer(timer_id: str) -> dict:
         if success:
             timer_status = timer_manager.get_timer_status(timer_id)
             remaining_min = timer_status['remaining_seconds'] // 60
-            print(f"  ✓ Paused timer: {timer_status['name']} ({remaining_min} min remaining)")
+            print(f"  OK Paused timer: {timer_status['name']} ({remaining_min} min remaining)")
             return {
                 "timer_id": timer_id,
                 "status": "paused",
@@ -282,7 +283,7 @@ async def handle_stop_timer(timer_id: str) -> dict:
     try:
         success = timer_manager.stop_timer(timer_id)
         if success:
-            print(f"  ✓ Stopped timer: {timer_id}")
+            print(f"  OK Stopped timer: {timer_id}")
             return {
                 "timer_id": timer_id,
                 "status": "stopped",
@@ -313,7 +314,7 @@ async def handle_get_timer_status(timer_id: str) -> dict:
             elif timer_status['status'] == 'completed':
                 status_msg += " (finished!)"
 
-            print(f"  ✓ {status_msg}")
+            print(f"  OK {status_msg}")
             return {
                 "timer_id": timer_id,
                 **timer_status,
@@ -332,7 +333,7 @@ async def handle_list_all_timers() -> dict:
 
     try:
         timers = timer_manager.get_all_timers()
-        print(f"  ✓ Found {len(timers)} timers")
+        print(f"  OK Found {len(timers)} timers")
 
         # Clean up old completed timers
         timer_manager.cleanup_completed_timers()

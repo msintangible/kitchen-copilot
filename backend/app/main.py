@@ -5,9 +5,18 @@ App setup and middleware only. Nothing else lives here.
 To run:
   uvicorn main:app --reload --port 8000
 """
+import sys
+import io
+
+if sys.platform == 'win32':
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 
 import logging
+import os
 from contextlib import asynccontextmanager
+
+from dotenv import load_dotenv
+load_dotenv(dotenv_path="backend/.env")
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -41,6 +50,7 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:3000",   # React dev server
         "http://localhost:5173",   # Vite dev server
+        "http://localhost:5174",   # Vite alternative port
     ],
     allow_credentials=True,
     allow_methods=["*"],

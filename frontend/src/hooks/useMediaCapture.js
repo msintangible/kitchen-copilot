@@ -56,8 +56,22 @@ export function useMediaCapture() {
       processor.onaudioprocess = (e) => {
         if (!isCapturingRef.current) return;
         const inputData = e.inputBuffer.getChannelData(0);
+        let outputData = inputData;
+        
+        // Guarantee exactly 16kHz for Gemini APIs
+        const targetRate = 16000;
+        if (audioCtx.sampleRate > targetRate) {
+           const ratio = audioCtx.sampleRate / targetRate;
+           const step = Math.round(ratio);
+           const downsampled = new Float32Array(Math.floor(inputData.length / step));
+           for(let i = 0; i < downsampled.length; i++) {
+               downsampled[i] = inputData[i * step];
+           }
+           outputData = downsampled;
+        }
+
         // Dispatch custom event with PCM data
-        window.dispatchEvent(new CustomEvent('copilot-audio-chunk', { detail: inputData }));
+        window.dispatchEvent(new CustomEvent('copilot-audio-chunk', { detail: outputData }));
       };
       
       audioContextRef.current = audioCtx;
