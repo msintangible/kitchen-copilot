@@ -41,13 +41,10 @@ export function useMediaCapture() {
         videoRef.current.srcObject = mediaStream;
       }
 
-      // Initialize Audio Context for 16kHz downsampling
-      const audioCtx = new (window.AudioContext || window.webkitAudioContext)({
-        sampleRate: 16000,
-      });
+      // Initialize Audio Context (Let browser pick preferred sample rate to prevent glitching)
+      const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
       const source = audioCtx.createMediaStreamSource(mediaStream);
-      // We use script processor for direct PCM access (simpler for 16-bit mono conversion)
-      // Note: ScriptProcessor is deprecated but widely used for raw PCM access until AudioWorklet is standard everywhere.
+      
       const processor = audioCtx.createScriptProcessor(4096, 1, 1);
       
       source.connect(processor);
@@ -56,12 +53,14 @@ export function useMediaCapture() {
       processor.onaudioprocess = (e) => {
         if (!isCapturingRef.current) return;
         const inputData = e.inputBuffer.getChannelData(0);
-        let outputData = inputData;
         
         // Guarantee exactly 16kHz for Gemini APIs
         const targetRate = 16000;
-        if (audioCtx.sampleRate > targetRate) {
-           const ratio = audioCtx.sampleRate / targetRate;
+        const sourceRate = audioCtx.sampleRate;
+        
+        let outputData = inputData;
+        if (sourceRate > targetRate) {
+           const ratio = sourceRate / targetRate;
            const step = Math.round(ratio);
            const downsampled = new Float32Array(Math.floor(inputData.length / step));
            for(let i = 0; i < downsampled.length; i++) {

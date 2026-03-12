@@ -9,8 +9,8 @@ import logging
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query, HTTPException
 
-from backend.security import validate_and_consume_token
-from backend.services.gemini_live import run_gemini_session
+from security import validate_and_consume_token
+from services.gemini_live import run_gemini_session
 
 logger = logging.getLogger("kitchen_copilot.routes.websocket")
 router = APIRouter()

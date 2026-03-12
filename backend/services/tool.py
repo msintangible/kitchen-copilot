@@ -8,7 +8,6 @@ from backend.db.firestore_client import save_recipe, recipe_exists
 from backend.services.timer import timer_manager
 
 load_dotenv()
-from backend.services.timer import timer_manager
 
 
 client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))

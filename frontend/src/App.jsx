@@ -7,7 +7,7 @@ import { TimerWidget } from './components/TimerWidget';
 import './App.css';
 
 // Replace with actual cloud run URL when deploying
-const WS_URL = 'ws://localhost:8001/ws';
+const WS_URL = 'ws://localhost:8000/ws';
 
 function App() {
   const { videoRef, isCapturing, isMuted, startCapture, stopCapture, toggleMute } = useMediaCapture();

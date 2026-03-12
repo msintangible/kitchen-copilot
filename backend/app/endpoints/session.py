@@ -5,7 +5,7 @@ HTTP endpoints — health check and session token creation.
 
 import logging
 from fastapi import APIRouter
-from backend.security import generate_session_token
+from security import generate_session_token
 
 logger = logging.getLogger("kitchen_copilot.routes.session")
 router = APIRouter()

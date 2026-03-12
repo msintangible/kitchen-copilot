@@ -23,7 +23,7 @@ from dotenv import load_dotenv # Corrected from user's example `genaid_dotenv`
 from google import genai
 from google.genai import types
 
-from backend.services.tool import search_recipes_tool, timer_tool, handle_tool_call
+from services.tool import search_recipes_tool, timer_tool, handle_tool_call
 
 load_dotenv()
 
@@ -56,7 +56,7 @@ Things you never do:
 
 async def get_active_state() -> dict:
     """Mock for now: grab active state to send to frontend."""
-    from backend.services.timer import get_timers
+    from services.timer import get_timers
     return {
         "timers": get_timers()
     }
@@ -79,7 +79,7 @@ async def run_gemini_session(websocket: WebSocket, session_id: str):
         dummy_stdout = io.StringIO()
         with contextlib.redirect_stdout(dummy_stdout):
             connection = client.aio.live.connect(
-                model="models/gemini-2.5-flash-native-audio-preview-12-2025",
+                model="models/gemini-2.5-flash-native-audio-latest",
                 config=types.LiveConnectConfig(
                     response_modalities=["AUDIO"],
                     system_instruction=types.Content(parts=[types.Part.from_text(text=SYSTEM_PROMPT)]),
@@ -114,10 +114,16 @@ async def run_gemini_session(websocket: WebSocket, session_id: str):
                                         audio=types.Blob(data=payload, mime_type="audio/pcm;rate=16000")
                                     )
                                 elif header == 0x01:
-                                    # User's API Key currently only supports the Audio-Only Preview model.
-                                    # Sending video frames causes a 1007 Invalid Payload crash. 
-                                    # We silently drop the camera frames until their account gains Multimodal Video access.
-                                    pass
+                                    # Video JPEG Frame
+                                    print(f"[{session_id}] Sending video frame ({len(payload)} bytes)...")
+                                    try:
+                                        await session.send_realtime_input(
+                                            video=types.Blob(data=payload, mime_type="image/jpeg")
+                                        )
+                                        print(f"[{session_id}] Video frame sent OK")
+                                    except Exception as ve:
+                                        print(f"[{session_id}] VIDEO SEND ERROR: {ve}")
+                                        traceback.print_exc()
                         elif "text" in data:
                             pass
                     except WebSocketDisconnect:
@@ -125,62 +131,73 @@ async def run_gemini_session(websocket: WebSocket, session_id: str):
                         break
                     except Exception as e:
                         print(f"[{session_id}] Client receive error: {e}")
+                        traceback.print_exc()
+                        break
 
             # Outbound loop: Gemini -> FastAPI -> Client
             async def receive_from_gemini():
                 try:
-                    async for response in session.receive():
-                        server_content = response.server_content
-                        if server_content is not None:
-                            # 1. Handle Audio output
-                            if server_content.model_turn is not None:
-                                for part in server_content.model_turn.parts:
-                                    if part.inline_data:
-                                        # Send raw PCM audio directly to frontend WebSocket
-                                        try:
-                                            # Debug log every 50th chunk 
-                                            # (approx 1 per second) to keep console clean
-                                            if not hasattr(session, '_debug_audio_count'):
-                                                session._debug_audio_count = 0
-                                            session._debug_audio_count += 1
-                                            if session._debug_audio_count % 50 == 1:
-                                                print(f"[{session_id}] Gemini sent {len(part.inline_data.data)} bytes audio (x{session._debug_audio_count})")
+                    while True:
+                        async for response in session.receive():
+                            server_content = response.server_content
+                            if server_content is not None:
+                                # 1. Handle Audio output
+                                if server_content.model_turn is not None:
+                                    for part in server_content.model_turn.parts:
+                                        if part.inline_data:
+                                            # Send raw PCM audio directly to frontend WebSocket
+                                            try:
+                                                # Debug log every 50th chunk 
+                                                # (approx 1 per second) to keep console clean
+                                                if not hasattr(session, '_debug_audio_count'):
+                                                    session._debug_audio_count = 0
+                                                session._debug_audio_count += 1
+                                                if session._debug_audio_count % 50 == 1:
+                                                    print(f"[{session_id}] Gemini sent {len(part.inline_data.data)} bytes audio (x{session._debug_audio_count})")
+                                                
+                                                await websocket.send_bytes(part.inline_data.data)
+                                            except Exception as e:
+                                                print(f"[{session_id}] Error sending audio to client: {e}")
+                                                return
+
+                                # 2. Handle Tool Calls
+                                if server_content.model_turn is not None:
+                                    for part in server_content.model_turn.parts:
+                                        if part.executable_code or part.code_execution_result:
+                                            pass # code execution not needed for now
+                                        if part.function_call:
+                                            tool_name = part.function_call.name
+                                            tool_args = part.function_call.args
+                                            print(f"[{session_id}] Agent called tool: {tool_name}")
                                             
-                                            await websocket.send_bytes(part.inline_data.data)
-                                        except Exception as e:
-                                            print(f"[{session_id}] Error sending audio to client: {e}")
-                                            return
+                                            # Execute the tool
+                                            result_dict = await handle_tool_call(tool_name, tool_args)
+                                            
+                                            # Send result back to Gemini
+                                            await session.send(
+                                                input=[types.Part.from_function_response(
+                                                    name=tool_name,
+                                                    response=result_dict
+                                                )]
+                                            )
+                                            
+                                            # Broadcast state to frontend
+                                            state = await get_active_state()
+                                            await websocket.send_text(json.dumps(state))
 
-                            # 2. Handle Tool Calls
-                            if server_content.model_turn is not None:
-                                for part in server_content.model_turn.parts:
-                                    if part.executable_code or part.code_execution_result:
-                                        pass # code execution not needed for now
-                                    if part.function_call:
-                                        tool_name = part.function_call.name
-                                        tool_args = part.function_call.args
-                                        print(f"[{session_id}] Agent called tool: {tool_name}")
-                                        
-                                        # Execute the tool
-                                        result_dict = await handle_tool_call(tool_name, tool_args)
-                                        
-                                        # Send result back to Gemini
-                                        await session.send(
-                                            input=[types.Part.from_function_response(
-                                                name=tool_name,
-                                                response=result_dict
-                                            )]
-                                        )
-                                        
-                                        # Broadcast state to frontend
-                                        state = await get_active_state()
-                                        await websocket.send_text(json.dumps(state))
+                                # Log anything else for debugging
+                                if server_content.model_turn is None and not response.server_content.interrupted:
+                                    print(f"[{session_id}] Gemini sent non-turn update: {response}")
 
-                        # Handle interruptions (if Gemini starts a new turn, we could tell frontend to clear audio buffer)
-                        if response.server_content and response.server_content.interrupted:
-                            print(f"[{session_id}] Gemini interrupted response!")
+                            # Handle interruptions (if Gemini starts a new turn, we could tell frontend to clear audio buffer)
+                            if response.server_content and response.server_content.interrupted:
+                                print(f"[{session_id}] Gemini interrupted response!")
+                        
+                        # Wait a tiny bit between turns to avoid tight spinning if it disconnects
+                        await asyncio.sleep(0.01)
 
                 except asyncio.CancelledError:
+                    print(f"[{session_id}] Gemini receive task was cancelled.")
                     pass
                 except Exception as e:
                     print(f"[{session_id}] Gemini receive error: {e}")
@@ -194,6 +211,12 @@ async def run_gemini_session(websocket: WebSocket, session_id: str):
                 [client_task, gemini_task],
                 return_when=asyncio.FIRST_COMPLETED
             )
+            
+            # Identify which task finished first
+            if client_task in done:
+                print(f"[{session_id}] Client socket loop exited first.")
+            if gemini_task in done:
+                print(f"[{session_id}] Gemini SDK loop exited first.")
             
             for task in pending:
                 task.cancel()

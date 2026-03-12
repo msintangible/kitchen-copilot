@@ -89,8 +89,11 @@ export function useCopilotWebSocket(url) {
       // Convert Float32 (-1.0 to 1.0) to Int16 (-32768 to 32767)
       const int16Array = new Int16Array(float32Array.length);
       let maxVol = 0;
+      const GAIN = 5.0; // Boost mic volume so Gemini can actually hear the user
+      
       for (let i = 0; i < float32Array.length; i++) {
-        const s = Math.max(-1, Math.min(1, float32Array[i]));
+        let s = float32Array[i] * GAIN;
+        s = Math.max(-1, Math.min(1, s));
         if (Math.abs(s) > maxVol) maxVol = Math.abs(s);
         int16Array[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
       }
@@ -117,6 +120,7 @@ export function useCopilotWebSocket(url) {
       buffer[0] = 0x01;
       buffer.set(new Uint8Array(arrayBuffer), 1);
       
+      console.log(`[Video Out] Sending frame: ${buffer.byteLength} bytes`);
       wsRef.current.send(buffer);
     };
 
@@ -146,6 +150,11 @@ export function useCopilotWebSocket(url) {
   const playAudioChunk = (int16Array) => {
     const ctx = playbackContextRef.current;
     if (!ctx) return;
+    
+    // Ensure browser hasn't paused our audio context
+    if (ctx.state !== 'running') {
+        ctx.resume();
+    }
 
     // Convert Int16 back to Float32
     const float32Array = new Float32Array(int16Array.length);
