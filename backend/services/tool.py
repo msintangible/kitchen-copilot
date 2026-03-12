@@ -3,6 +3,8 @@ import httpx
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
+
+from backend.db.firestore_client import save_recipe, recipe_exists
 from backend.services.timer import timer_manager
 
 load_dotenv()
@@ -197,13 +199,32 @@ async def handle_search_recipes(ingredients: list) -> dict:
             match_pct = round((r["usedIngredientCount"] / total) * 100) if total > 0 else 0
             missing = [i["name"] for i in r.get("missedIngredients", [])]
 
-            recipes.append({
+            # STEP 1: fetch instructions
+            instructions = await fetch_recipe_steps(r["id"])
+
+            steps = []
+            if instructions:
+                for step in instructions[0].get("steps", []):
+                    steps.append(step["step"])
+
+            formatted = {
                 "id": r["id"],
                 "name": r["title"],
                 "match_percentage": match_pct,
                 "missing_ingredients": missing,
-                "image": r.get("image", "")
-            })
+                "image": r.get("image", ""),
+                "steps": steps  # ← ADD THIS
+            }
+
+            recipes.append(formatted)
+
+            # Step 3 — save to Firestore if not already there
+            already_saved = await recipe_exists(str(r["id"]))
+            if not already_saved:
+                await save_recipe(formatted)
+                print("saved to firestore database")
+            else:
+                print(f"  → Already in Firestore: {r['title']}")
 
         print(f"  OK Found {len(recipes)} recipes from Spoonacular")
         return {"recipes": recipes}
@@ -375,48 +396,64 @@ if __name__ == "__main__":
     async def test():
         print("Testing Kitchen Copilot Tools...\n")
 
-        # Test recipe search
+        # === Test recipe search ===
         print("=== Testing Recipe Search ===")
         result = await handle_tool_call(
             "search_recipes",
             {"ingredients": ["pasta", "garlic", "eggs", "parmesan"]}
         )
+
+        recipes = result.get("recipes", [])
+
         print("\nRecipes found:")
-        for r in result.get("recipes", []):
+        for r in recipes:
             print(f"  - {r['name']} ({r['match_percentage']}% match)")
             if r['missing_ingredients']:
                 print(f"    Missing: {', '.join(r['missing_ingredients'])}")
 
+        # === Verify Firestore Save ===
+        print("\n=== Verifying Firestore Save ===")
+
+        for r in recipes:
+            exists = await recipe_exists(str(r["id"]))
+
+            if exists:
+                print(f"  ✓ Recipe saved in Firestore: {r['name']}")
+            else:
+                print(f"  ✗ Recipe NOT found in Firestore: {r['name']}")
+
+        # === Timer Tests ===
         print("\n=== Testing Timer Functionality ===")
 
-        # Test timer creation
         timer_result = await handle_tool_call(
             "set_cooking_timer",
             {"name": "Boil pasta", "minutes": 10}
         )
+
         timer_id = timer_result.get("timer_id")
         print(f"Created timer: {timer_result.get('message')}")
 
-        # Test starting timer
         if timer_id:
             start_result = await handle_tool_call("start_timer", {"timer_id": timer_id})
             print(f"Started timer: {start_result.get('message')}")
 
-            # Wait a few seconds
             await asyncio.sleep(3)
 
-            # Check timer status
             status_result = await handle_tool_call("get_timer_status", {"timer_id": timer_id})
             print(f"Timer status: {status_result.get('message')}")
 
-            # Test pausing
             pause_result = await handle_tool_call("pause_timer", {"timer_id": timer_id})
             print(f"Paused timer: {pause_result.get('message')}")
 
-        # Test listing all timers
+        # === List timers ===
         list_result = await handle_tool_call("list_all_timers", {})
+
         print(f"\nAll timers: {list_result.get('message')}")
+
         for timer in list_result.get("timers", []):
-            print(f"  - {timer['name']}: {timer['status']} ({timer['remaining_seconds']//60} min left)")
+            print(
+                f"  - {timer['name']}: {timer['status']} "
+                f"({timer['remaining_seconds']//60} min left)"
+            )
 
     asyncio.run(test())
