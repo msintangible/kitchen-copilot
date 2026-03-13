@@ -1,8 +1,9 @@
-import { useState } from 'react';
-import { Camera, Mic, MicOff, Play, Pause, Square, Flame, CheckCircle2, ChevronRight, Timer as TimerIcon } from 'lucide-react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
+import { Camera, Mic, MicOff, Play, Square, Flame } from 'lucide-react';
 import { useMediaCapture } from './hooks/useMediaCapture';
 import { useCopilotWebSocket } from './hooks/useCopilotWebSocket';
 import { RecipeSidebar } from './components/RecipeSidebar';
+import { RecipePicker } from './components/RecipePicker';
 import { TimerWidget } from './components/TimerWidget';
 import './App.css';
 
@@ -11,61 +12,74 @@ const WS_URL = 'ws://localhost:8000/ws';
 
 function App() {
   const { videoRef, isCapturing, isMuted, startCapture, stopCapture, toggleMute } = useMediaCapture();
-  const { isConnected, sessionState, connect, disconnect } = useCopilotWebSocket(WS_URL);
+  const { 
+    isConnected, 
+    recipes,
+    activeRecipe, 
+    timers,
+    sidebarVisible,
+    setSidebarVisible,
+    currentStep,
+    setCurrentStep,
+    uiCommandCallbackRef,
+    connect, 
+    disconnect,
+    sendMessage 
+  } = useCopilotWebSocket(WS_URL);
   
   const [isActive, setIsActive] = useState(false);
+  const [focusedTimerId, setFocusedTimerId] = useState(null);
   
   // Derive status from session state
   const agentStatus = isActive ? 'listening' : 'idle'; 
   const displayStatus = isActive ? 'Live' : 'Idle';
-  
-  // Mock Data for layout testing - using state so steps can be clicked to complete
-  const recipeInfo = {
-    name: "Classic Spaghetti Aglio e Olio",
-    difficulty: "Easy",
-    time: "25 min"
-  };
 
-  const initialSteps = [
-    { num: 1, text: "Bring a large pot of salted water to boil. Add spaghetti and cook until al dente.", active: true, done: false, ingredients: ["Spaghetti"] },
-    { num: 2, text: "Meanwhile, thinly slice the garlic and finely chop the parsley.", active: false, done: false, ingredients: ["Garlic"] },
-    { num: 3, text: "Heat olive oil in a large skillet over medium heat. Sauté garlic until golden.", active: false, done: false, ingredients: ["Olive Oil", "Garlic", "Chili Flakes"] },
-    { num: 4, text: "Add a ladle of pasta water to the skillet, then toss in the drained spaghetti.", active: false, done: false, ingredients: [] },
-    { num: 5, text: "Toss vigorously over low heat until an emulsified sauce forms.", active: false, done: false, ingredients: [] },
-    { num: 6, text: "Remove from heat, stir in fresh parsley, and season with salt and pepper.", active: false, done: false, ingredients: [] },
-    { num: 7, text: "Serve immediately, optionally topped with freshly grated parmesan cheese.", active: false, done: false, ingredients: [] },
-  ];
+  // Register generic UI command callback so voice commands work
+  useEffect(() => {
+    uiCommandCallbackRef.current = (command) => {
+      if (command.action === 'toggle_mute') toggleMute();
+      if (command.action === 'focus_timer' && command.timer_id) {
+        setFocusedTimerId(command.timer_id);
+      }
+    };
+  }, [toggleMute, uiCommandCallbackRef]);
 
-  const [mockSteps, setMockSteps] = useState(initialSteps);
+  // Build steps array from active recipe
+  const activeSteps = activeRecipe?.steps?.map((text, i) => ({
+    num: i + 1,
+    text,
+    active: i === currentStep,
+    done: i < currentStep,
+  })) || [];
 
-  const identifiedIngredients = ["Garlic", "Spaghetti", "Olive Oil", "Chili Flakes"];
-
-  // Click a step to mark it as done and advance to the next
+  // Handle step click from sidebar
   const handleStepClick = (stepNum) => {
-    setMockSteps(prev => prev.map(s => {
-      if (s.num === stepNum && !s.done) {
-        return { ...s, done: true, active: false };
-      }
-      if (s.num === stepNum + 1) {
-        return { ...s, active: true };
-      }
-      return s;
-    }));
+    setCurrentStep(stepNum); // Move to the clicked step (marks previous as done)
   };
 
-  // If sessionState is populated from the backend, use it. Otherwise, use mock.
-  const activeRecipe = sessionState?.recipe || recipeInfo;
-  const activeSteps = sessionState?.steps || mockSteps;
-  const activeIngredients = sessionState?.ingredients || identifiedIngredients;
-  const activeTimers = sessionState?.timers || [
-    { id: '1', label: "Boil Pasta", durationSeconds: 600, remainingSeconds: 600, status: "created" },
-    { id: '2', label: "Bake Chicken", durationSeconds: 1500, remainingSeconds: 420, status: "running" },
-    { id: '3', label: "Chill Dessert", durationSeconds: 3600, remainingSeconds: 3600, status: "paused" }
-  ];
+  // Handle recipe selection from picker
+  const handleRecipeSelect = (recipe) => {
+    console.log("User clicked recipe:", recipe.name);
+    // Send message to Gemini stating the user picked the recipe
+    sendMessage({ clientContent: `I want to cook the ${recipe.name} recipe.` });
+  };
+
+  // Derive which timers to show (max 3, focused timer always first)
+  const displayTimers = useMemo(() => {
+    let sorted = [...timers];
+    if (focusedTimerId) {
+      // Find timer by ID or matching exactly its name
+      const idx = sorted.findIndex(t => t.id === focusedTimerId || t.name === focusedTimerId);
+      if (idx !== -1) {
+        const [focused] = sorted.splice(idx, 1);
+        sorted.unshift(focused); // Move to front
+      }
+    }
+    return sorted.slice(0, 3);
+  }, [timers, focusedTimerId]);
 
   const toggleActive = () => {
     if (!isActive) {
-      setMockSteps(initialSteps); // Reset steps to fresh state
       startCapture();
       connect();
       setIsActive(true);
@@ -101,45 +115,61 @@ function App() {
         )}
       </div>
 
-      {/* Top HUD */}
+      {/* Top HUD — only Live status dot when active */}
       <div className="hud-top">
         <div className="glass-pill status-pill">
           <div className={`animate-pulse status-dot ${agentStatus}`}></div>
           <span className="capitalize">{displayStatus}</span>
         </div>
         
-        {isActive && (
+        {/* Recipe name pill — only when a recipe is active */}
+        {isActive && activeRecipe && (
           <div className="glass-pill px-4 py-2 flex items-center gap-2">
             <Flame size={16} className="text-orange-400" />
-            <span className="text-sm font-medium">{recipeInfo.name}</span>
+            <span className="text-sm font-medium">{activeRecipe.name}</span>
           </div>
         )}
       </div>
 
-      {/* Main Recipe Sidebar (Visible only when active) */}
-      {isActive && (
-        <RecipeSidebar 
-          recipeName={activeRecipe.name}
-          difficulty={activeRecipe.difficulty}
-          time={activeRecipe.time}
-          steps={activeSteps}
-          identifiedIngredients={activeIngredients}
-          onStepClick={handleStepClick}
+      {/* Recipe Picker Popup — appears when recipes are returned but none selected */}
+      {isActive && recipes.length > 0 && !activeRecipe && (
+        <RecipePicker 
+          recipes={recipes}
+          onSelect={handleRecipeSelect}
+          onClose={() => {/* User can dismiss by voice */}}
         />
       )}
 
-      {/* Floating Timers Area */}
-      {isActive && activeTimers.length > 0 && (
+      {/* Main Recipe Sidebar — only when a recipe is selected AND sidebar is toggled on */}
+      {isActive && activeRecipe && sidebarVisible && (
+        <RecipeSidebar 
+          recipeName={activeRecipe.name}
+          difficulty={activeRecipe.match_percentage >= 70 ? "Easy" : activeRecipe.match_percentage >= 40 ? "Medium" : "Hard"}
+          time={`${activeSteps.length} steps`}
+          steps={activeSteps}
+          identifiedIngredients={activeRecipe.missing_ingredients || []}
+          onStepClick={handleStepClick}
+          onClose={() => setSidebarVisible(false)}
+        />
+      )}
+
+      {/* Floating Timers Area — only show top 3 timers */}
+      {isActive && timers.length > 0 && (
         <div className="timers-container">
-          {activeTimers.map(t => (
+          {displayTimers.map(t => (
             <TimerWidget 
-              key={t.id} 
-              label={t.label} 
-              durationSeconds={t.durationSeconds}
-              remainingSeconds={t.remainingSeconds}
+              key={t.id || t.name} 
+              label={t.name || t.label} 
+              durationSeconds={t.total_seconds || t.durationSeconds}
+              remainingSeconds={t.remaining_seconds || t.remainingSeconds}
               status={t.status}
             />
           ))}
+          {timers.length > 3 && (
+            <div className="text-xs text-slate-400 font-medium ml-4 absolute -top-8 left-0 pl-1 drop-shadow-md">
+              + {timers.length - 3} background timers running
+            </div>
+          )}
         </div>
       )}
 

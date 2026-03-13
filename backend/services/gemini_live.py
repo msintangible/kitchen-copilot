@@ -6,8 +6,11 @@ import builtins
 _original_print = builtins.print
 def safe_print(*args, **kwargs):
     try:
+        msg = " ".join(str(a) for a in args)
+        with open("backend_debug.txt", "a", encoding="utf-8") as f:
+            f.write(msg + "\n")
         _original_print(*args, **kwargs)
-    except UnicodeEncodeError:
+    except Exception:
         pass  # Just swallow it! Let the server live!
 builtins.print = safe_print
 
@@ -23,7 +26,7 @@ from dotenv import load_dotenv # Corrected from user's example `genaid_dotenv`
 from google import genai
 from google.genai import types
 
-from services.tool import search_recipes_tool, timer_tool, handle_tool_call
+from services.tool import search_recipes_tool, timer_tool, ui_command_tool, handle_tool_call, pop_pending_ui_commands, reset_backend_state
 
 load_dotenv()
 
@@ -41,16 +44,30 @@ Your personality:
 - Stay positive when things go wrong. Suggest a fix, never blame.
 
 How you work:
-- When the session starts, greet the user and ask what they want to cook.
-- Walk through recipes ONE STEP AT A TIME.
-- Wait for the user to confirm a step is done before moving on.
-- If you need to set a timer, use the tool. If the user asks about a timer, use the tool.
-- If the user asks for recipes based on ingredients, use the tool.
+- When the session starts, greet the user briefly and ask what they'd like to cook or what ingredients they have.
+- When the user mentions ingredients (by voice or you see them on camera), 
+  call the search_recipes tool immediately.
+- After search_recipes returns, the user sees a visual popup with the recipe cards on their screen.
+  DO NOT read out all the recipe details. Just say something brief like:
+  "I found 3 recipes! Take a look and tell me which one you'd like to try."
+- When the user tells you which recipe they want, IMMEDIATELY call the ui_command tool
+  with action='select_recipe' and recipe_id set to the chosen recipe's Spoonacular ID.
+  This will automatically display the recipe steps on the user's screen.
+- Then walk through the recipe ONE STEP AT A TIME. Read each step aloud briefly.
+- Wait for the user to say "done" or "next" before moving on.
+- If a step involves timing (e.g. "bake for 20 minutes"), proactively ask if they want a timer set.
+
+Voice commands you must handle via the ui_command tool:
+- "Show recipe" or "open sidebar" → call ui_command with action='show_sidebar'
+- "Hide recipe" or "close sidebar" → call ui_command with action='hide_sidebar'  
+- "Mute" or "unmute" → call ui_command with action='toggle_mute'
+- "Done" or "next step" → call ui_command with action='step_done'
+- "Show my other timer" or "Bring pasta timer to front" → call ui_command with action='focus_timer' and timer_id='the_timer_id'
 
 Things you never do:
-- Never give long paragraphs.
+- Never give long paragraphs or list all recipe details verbally (the screen shows them).
 - Never move to the next step without confirmation.
-- Never say you can't see the camera if you can see it. If you can't, ask the user to adjust the camera.
+- Never say you can't see the camera if you can see it.
 """
 
 
@@ -72,6 +89,7 @@ async def run_gemini_session(websocket: WebSocket, session_id: str):
     import io
 
     print(f"[{session_id}] Opening Gemini Live session...")
+    reset_backend_state()
 
     try:
         # The Gemini SDK prints a checkmark when it connects that crashes Windows consoles. 
@@ -83,7 +101,7 @@ async def run_gemini_session(websocket: WebSocket, session_id: str):
                 config=types.LiveConnectConfig(
                     response_modalities=["AUDIO"],
                     system_instruction=types.Content(parts=[types.Part.from_text(text=SYSTEM_PROMPT)]),
-                    tools=[search_recipes_tool, timer_tool]
+                    tools=[search_recipes_tool, timer_tool, ui_command_tool]
                 )
             )
         
@@ -102,6 +120,12 @@ async def run_gemini_session(websocket: WebSocket, session_id: str):
                 while True:
                     try:
                         data = await websocket.receive()
+                        
+                        # Check for disconnect message
+                        if data.get("type") == "websocket.disconnect":
+                            print(f"[{session_id}] Client sent disconnect frame.")
+                            break
+                        
                         if "bytes" in data:
                             raw_bytes = data["bytes"]
                             if len(raw_bytes) > 0:
@@ -125,9 +149,22 @@ async def run_gemini_session(websocket: WebSocket, session_id: str):
                                         print(f"[{session_id}] VIDEO SEND ERROR: {ve}")
                                         traceback.print_exc()
                         elif "text" in data:
-                            pass
+                            text_data = data["text"]
+                            print(f"[{session_id}] 📥 Received text payload from client: {text_data[:50]}...")
+                            try:
+                                json_payload = json.loads(text_data)
+                                if "clientContent" in json_payload:
+                                    # Passing text prompt directly to Gemini
+                                    print(f"[{session_id}] 📤 Sending text prompt to Gemini...")
+                                    await session.send(input=text_data, end_of_turn=True)
+                            except Exception as text_e:
+                                print(f"[{session_id}] Error parsing text from client: {text_e}")
                     except WebSocketDisconnect:
-                        print(f"[{session_id}] Client disconnected inside receive loop.")
+                        print(f"[{session_id}] Client disconnected (WebSocketDisconnect).")
+                        break
+                    except RuntimeError as re:
+                        # "Cannot call receive once disconnect" — normal cleanup
+                        print(f"[{session_id}] Client WebSocket closed: {re}")
                         break
                     except Exception as e:
                         print(f"[{session_id}] Client receive error: {e}")
@@ -139,16 +176,53 @@ async def run_gemini_session(websocket: WebSocket, session_id: str):
                 try:
                     while True:
                         async for response in session.receive():
+                          try:
+                            # ── Handle tool_call at top level (Live API format) ──
+                            tool_call = getattr(response, 'tool_call', None)
+                            if tool_call is not None:
+                                for fc in tool_call.function_calls:
+                                    tool_name = fc.name
+                                    tool_args = fc.args
+                                    tool_id = getattr(fc, 'id', '')
+                                    print(f"[{session_id}] 🔧 Tool call (Live API): {tool_name}({tool_args}) id={tool_id}")
+                                    
+                                    try:
+                                        result_dict = await handle_tool_call(tool_name, tool_args)
+                                    except Exception as e:
+                                        print(f"[{session_id}] ✗ Tool execution error: {e}")
+                                        traceback.print_exc()
+                                        result_dict = {"error": str(e)}
+                                    
+                                    await session.send(
+                                        input=types.LiveClientToolResponse(
+                                            function_responses=[
+                                                types.FunctionResponse(
+                                                    name=tool_name,
+                                                    id=tool_id,
+                                                    response=result_dict
+                                                )
+                                            ]
+                                        )
+                                    )
+                                    
+                                    # Broadcast timer state
+                                    state = await get_active_state()
+                                    await websocket.send_text(json.dumps(state))
+                                    
+                                    # Broadcast pending UI commands
+                                    pending = pop_pending_ui_commands()
+                                    for cmd in pending:
+                                        print(f"[{session_id}] 📤 Sending to frontend: {cmd.get('type')}")
+                                        await websocket.send_text(json.dumps(cmd))
+                                continue
+
                             server_content = response.server_content
                             if server_content is not None:
                                 # 1. Handle Audio output
                                 if server_content.model_turn is not None:
                                     for part in server_content.model_turn.parts:
                                         if part.inline_data:
-                                            # Send raw PCM audio directly to frontend WebSocket
                                             try:
-                                                # Debug log every 50th chunk 
-                                                # (approx 1 per second) to keep console clean
                                                 if not hasattr(session, '_debug_audio_count'):
                                                     session._debug_audio_count = 0
                                                 session._debug_audio_count += 1
@@ -160,48 +234,68 @@ async def run_gemini_session(websocket: WebSocket, session_id: str):
                                                 print(f"[{session_id}] Error sending audio to client: {e}")
                                                 return
 
-                                # 2. Handle Tool Calls
+                                # 2. Handle Tool Calls in server_content (fallback path)
                                 if server_content.model_turn is not None:
                                     for part in server_content.model_turn.parts:
-                                        if part.executable_code or part.code_execution_result:
-                                            pass # code execution not needed for now
                                         if part.function_call:
                                             tool_name = part.function_call.name
                                             tool_args = part.function_call.args
-                                            print(f"[{session_id}] Agent called tool: {tool_name}")
+                                            tool_id = getattr(part.function_call, 'id', '')
+                                            print(f"[{session_id}] 🔧 Tool call (server_content): {tool_name}({tool_args}) id={tool_id}")
                                             
-                                            # Execute the tool
-                                            result_dict = await handle_tool_call(tool_name, tool_args)
+                                            try:
+                                                result_dict = await handle_tool_call(tool_name, tool_args)
+                                            except Exception as e:
+                                                print(f"[{session_id}] ✗ Tool execution error: {e}")
+                                                traceback.print_exc()
+                                                result_dict = {"error": str(e)}
                                             
-                                            # Send result back to Gemini
                                             await session.send(
-                                                input=[types.Part.from_function_response(
-                                                    name=tool_name,
-                                                    response=result_dict
-                                                )]
+                                                input=types.LiveClientToolResponse(
+                                                    function_responses=[
+                                                        types.FunctionResponse(
+                                                            name=tool_name,
+                                                            id=tool_id,
+                                                            response=result_dict
+                                                        )
+                                                    ]
+                                                )
                                             )
                                             
                                             # Broadcast state to frontend
                                             state = await get_active_state()
                                             await websocket.send_text(json.dumps(state))
+                                            
+                                            # Broadcast pending UI commands
+                                            pending = pop_pending_ui_commands()
+                                            for cmd in pending:
+                                                print(f"[{session_id}] 📤 Sending to frontend: {cmd.get('type')}")
+                                                await websocket.send_text(json.dumps(cmd))
 
-                                # Log anything else for debugging
-                                if server_content.model_turn is None and not response.server_content.interrupted:
-                                    print(f"[{session_id}] Gemini sent non-turn update: {response}")
+                                # Log non-turn updates for debugging
+                                if server_content.model_turn is None:
+                                    interrupted = getattr(response.server_content, 'interrupted', False)
+                                    if not interrupted:
+                                        print(f"[{session_id}] Gemini turn_complete or non-turn update")
 
-                            # Handle interruptions (if Gemini starts a new turn, we could tell frontend to clear audio buffer)
-                            if response.server_content and response.server_content.interrupted:
+                            # Handle interruptions
+                            if response.server_content and getattr(response.server_content, 'interrupted', False):
                                 print(f"[{session_id}] Gemini interrupted response!")
+                          except Exception as inner_e:
+                            print(f"[{session_id}] ⚠ Error processing Gemini response (continuing): {inner_e}")
+                            traceback.print_exc()
                         
                         # Wait a tiny bit between turns to avoid tight spinning if it disconnects
                         await asyncio.sleep(0.01)
 
                 except asyncio.CancelledError:
                     print(f"[{session_id}] Gemini receive task was cancelled.")
-                    pass
+                    return  # Only exit on cancellation (session stopped by user)
                 except Exception as e:
-                    print(f"[{session_id}] Gemini receive error: {e}")
+                    print(f"[{session_id}] Gemini receive error (will retry in 1s): {e}")
                     traceback.print_exc()
+                    await asyncio.sleep(1)  # Brief pause before retrying
+                    # DON'T return — the while True loop will restart session.receive()
 
             # Run both loops concurrently
             client_task = asyncio.create_task(receive_from_client())

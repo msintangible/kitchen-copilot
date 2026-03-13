@@ -7,7 +7,12 @@ import { useState, useEffect, useRef, useCallback } from 'react';
  */
 export function useCopilotWebSocket(url) {
   const [isConnected, setIsConnected] = useState(false);
-  const [sessionState, setSessionState] = useState(null); // Backend updates
+  const [recipes, setRecipes] = useState([]);         // Recipe picker results
+  const [activeRecipe, setActiveRecipe] = useState(null); // Currently selected recipe
+  const [timers, setTimers] = useState([]);            // Active cooking timers
+  const [sidebarVisible, setSidebarVisible] = useState(false);
+  const [currentStep, setCurrentStep] = useState(0);   // Index of current step
+  const uiCommandCallbackRef = useRef(null);           // Callback for toggle_mute etc.
   const wsRef = useRef(null);
   
   // Audio playback
@@ -65,8 +70,32 @@ export function useCopilotWebSocket(url) {
         if (typeof event.data === 'string') {
           try {
             const data = JSON.parse(event.data);
-            console.log("Copilot State Update:", data);
-            setSessionState(data);
+            console.log("Copilot Message:", data);
+            
+            // Route by message type
+            if (data.type === 'recipe_results') {
+              // Recipe picker results from Spoonacular
+              setRecipes(data.recipes || []);
+            } else if (data.type === 'recipe_selected') {
+              // User picked a recipe — show sidebar
+              setActiveRecipe(data.recipe);
+              setCurrentStep(0);
+              setSidebarVisible(true);
+              setRecipes([]); // Clear picker
+            } else if (data.type === 'ui_command') {
+              // Voice command from Gemini
+              const action = data.action;
+              if (action === 'show_sidebar') setSidebarVisible(true);
+              else if (action === 'hide_sidebar') setSidebarVisible(false);
+              else if (action === 'step_done') setCurrentStep(prev => prev + 1);
+              
+              if (uiCommandCallbackRef.current) {
+                uiCommandCallbackRef.current(data);
+              }
+            } else if (data.timers) {
+              // Timer state update
+              setTimers(data.timers);
+            }
           } catch (e) {
             console.error("Failed to parse websocket message", e);
           }
@@ -89,7 +118,9 @@ export function useCopilotWebSocket(url) {
       // Convert Float32 (-1.0 to 1.0) to Int16 (-32768 to 32767)
       const int16Array = new Int16Array(float32Array.length);
       let maxVol = 0;
-      const GAIN = 5.0; // Boost mic volume so Gemini can actually hear the user
+      // We rely on the browser's autoGainControl for volume. A small 1.5x boost is fine, 
+      // but 15x amplifies background noise and breaks Gemini's silence detection (VAD).
+      const GAIN = 1.5; 
       
       for (let i = 0; i < float32Array.length; i++) {
         let s = float32Array[i] * GAIN;
@@ -144,6 +175,17 @@ export function useCopilotWebSocket(url) {
       wsRef.current = null;
     }
     setIsConnected(false);
+    setRecipes([]);
+    setActiveRecipe(null);
+    setTimers([]);
+    setSidebarVisible(false);
+    setCurrentStep(0);
+  }, []);
+
+  const sendMessage = useCallback((msgObj) => {
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify(msgObj));
+    }
   }, []);
 
   // Simple sequential audio player for PCM chunks
@@ -162,7 +204,9 @@ export function useCopilotWebSocket(url) {
       float32Array[i] = int16Array[i] / 32768.0;
     }
 
-    const audioBuffer = ctx.createBuffer(1, float32Array.length, ctx.sampleRate);
+    // Gemini Live API streams audio at 24kHz
+    const GEMINI_SAMPLE_RATE = 24000;
+    const audioBuffer = ctx.createBuffer(1, float32Array.length, GEMINI_SAMPLE_RATE);
     audioBuffer.getChannelData(0).set(float32Array);
 
     const source = ctx.createBufferSource();
@@ -181,8 +225,16 @@ export function useCopilotWebSocket(url) {
 
   return {
     isConnected,
-    sessionState,
+    recipes,
+    activeRecipe,
+    timers,
+    sidebarVisible,
+    setSidebarVisible,
+    currentStep,
+    setCurrentStep,
+    uiCommandCallbackRef,
     connect,
-    disconnect
+    disconnect,
+    sendMessage
   };
 }

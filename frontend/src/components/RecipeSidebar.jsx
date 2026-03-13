@@ -1,7 +1,7 @@
-import { CheckCircle2 } from 'lucide-react';
+import { CheckCircle2, X } from 'lucide-react';
 import { useRef, useEffect } from 'react';
 
-export function RecipeSidebar({ recipeName, difficulty, time, steps, identifiedIngredients, onStepClick }) {
+export function RecipeSidebar({ recipeName, difficulty, time, steps, identifiedIngredients, onStepClick, onClose }) {
   const stepsContainerRef = useRef(null);
   const activeStepRef = useRef(null);
 
@@ -50,7 +50,19 @@ export function RecipeSidebar({ recipeName, difficulty, time, steps, identifiedI
     <aside className="recipe-sidebar glass-panel animate-in" style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
       {/* Header - fixed at top */}
       <div style={{ flexShrink: 0 }}>
-        <h2 className="text-xl font-semibold tracking-tight">{recipeName}</h2>
+        <div className="flex items-center justify-between">
+          <h2 className="text-xl font-semibold tracking-tight" style={{ flex: 1 }}>{recipeName}</h2>
+          {onClose && (
+            <button 
+              onClick={onClose} 
+              className="btn-icon" 
+              style={{ width: 32, height: 32, flexShrink: 0 }}
+              title="Close sidebar"
+            >
+              <X size={16} />
+            </button>
+          )}
+        </div>
         <p className="mt-1.5 text-[0.9rem]" style={{ marginBottom: '16px' }}>
           <span className={`${difficultyColor} font-medium`}>{difficulty}</span> 
           <span className="text-slate-500 mx-2">•</span> 

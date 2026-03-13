@@ -41,8 +41,9 @@ export function useMediaCapture() {
         videoRef.current.srcObject = mediaStream;
       }
 
-      // Initialize Audio Context (Let browser pick preferred sample rate to prevent glitching)
-      const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      // Initialize Audio Context enforcing 16kHz sample rate natively
+      // This is much higher quality than manual array decimation
+      const audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
       const source = audioCtx.createMediaStreamSource(mediaStream);
       
       const processor = audioCtx.createScriptProcessor(4096, 1, 1);
@@ -52,25 +53,12 @@ export function useMediaCapture() {
       
       processor.onaudioprocess = (e) => {
         if (!isCapturingRef.current) return;
+        
+        // Data is already 16kHz because we set it in the AudioContext constructor
         const inputData = e.inputBuffer.getChannelData(0);
-        
-        // Guarantee exactly 16kHz for Gemini APIs
-        const targetRate = 16000;
-        const sourceRate = audioCtx.sampleRate;
-        
-        let outputData = inputData;
-        if (sourceRate > targetRate) {
-           const ratio = sourceRate / targetRate;
-           const step = Math.round(ratio);
-           const downsampled = new Float32Array(Math.floor(inputData.length / step));
-           for(let i = 0; i < downsampled.length; i++) {
-               downsampled[i] = inputData[i * step];
-           }
-           outputData = downsampled;
-        }
 
-        // Dispatch custom event with PCM data
-        window.dispatchEvent(new CustomEvent('copilot-audio-chunk', { detail: outputData }));
+        // Dispatch custom event with Float32 PCM data
+        window.dispatchEvent(new CustomEvent('copilot-audio-chunk', { detail: inputData }));
       };
       
       audioContextRef.current = audioCtx;

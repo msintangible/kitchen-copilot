@@ -145,6 +145,13 @@ class TimerManager:
         del self.timers[timer_id]
         return True
 
+    def reset_all(self):
+        """Cancel all running tasks and delete all timers"""
+        for task in self._running_tasks.values():
+            task.cancel()
+        self._running_tasks.clear()
+        self.timers.clear()
+
     async def _run_timer(self, timer_id: str):
         """Internal method to run the timer countdown"""
         try:

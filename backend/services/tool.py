@@ -1,11 +1,26 @@
-﻿import os
+import os
 import httpx
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
 
-from backend.db.firestore_client import save_recipe, recipe_exists
-from backend.services.timer import timer_manager
+
+# Firestore is optional — app works without it (recipes won't be cached)
+try:
+    from backend.db.firestore_client import save_recipe, recipe_exists
+except (ModuleNotFoundError, ImportError):
+    try:
+        from db.firestore_client import save_recipe, recipe_exists
+    except (ModuleNotFoundError, ImportError):
+        async def save_recipe(*a, **kw): pass
+        async def recipe_exists(*a, **kw): return False
+        print("  ⚠ Firestore not available — recipes won't be cached")
+
+# Timer manager
+try:
+    from backend.services.timer import timer_manager
+except (ModuleNotFoundError, ImportError):
+    from services.timer import timer_manager
 
 load_dotenv()
 
@@ -13,6 +28,47 @@ load_dotenv()
 client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 SPOONACULAR_KEY = os.getenv("SPOONACULAR_API_KEY")
 SPOONACULAR_BASE = "https://api.spoonacular.com"
+
+
+# ── Session State (shared across tool calls within a session) ─────
+# This stores the last fetched recipes so the frontend can be updated.
+session_state = {
+    "recipes": [],          # Last fetched recipe results
+    "active_recipe": None,  # Currently selected recipe
+    "pending_ui_commands": [],  # Queue of UI commands to send to frontend
+}
+
+def get_session_recipes():
+    """Get the current recipe state for broadcasting to frontend."""
+    return session_state["recipes"]
+
+def get_active_recipe():
+    """Get the currently selected recipe."""
+    return session_state["active_recipe"]
+
+def set_active_recipe(recipe_id: int):
+    """Set the active recipe by its Spoonacular ID."""
+    for r in session_state["recipes"]:
+        if r["id"] == recipe_id:
+            session_state["active_recipe"] = r
+            return r
+    return None
+
+def pop_pending_ui_commands():
+    """Pop all pending UI commands (drain the queue)."""
+    commands = session_state["pending_ui_commands"][:]
+    session_state["pending_ui_commands"] = []
+    return commands
+
+def reset_backend_state():
+    """Reset the session state (recipes) and all active timers."""
+    session_state["recipes"] = []
+    session_state["active_recipe"] = None
+    session_state["pending_ui_commands"] = []
+    try:
+        timer_manager.reset_all()
+    except Exception as e:
+        print(f"Error resetting timers: {e}")
 
 
 # ── Real Spoonacular calls ────────────────────────────────────────
@@ -181,6 +237,38 @@ timer_tool = types.Tool(
     ]
 )
 
+ui_command_tool = types.Tool(
+    function_declarations=[
+        types.FunctionDeclaration(
+            name="ui_command",
+            description=(
+                "Send a UI command to the frontend app. Use this when the user asks to "
+                "show or hide the recipe sidebar, mute/unmute their microphone, or mark "
+                "the current cooking step as done. Valid actions: "
+                "'show_sidebar', 'hide_sidebar', 'toggle_mute', 'step_done', 'select_recipe'."
+            ),
+            parameters=types.Schema(
+                type=types.Type.OBJECT,
+                properties={
+                    "action": types.Schema(
+                        type=types.Type.STRING,
+                        description="The UI action to perform: 'show_sidebar', 'hide_sidebar', 'toggle_mute', 'step_done', 'select_recipe', or 'focus_timer'"
+                    ),
+                    "recipe_id": types.Schema(
+                        type=types.Type.INTEGER,
+                        description="The Spoonacular recipe ID, only needed when action is 'select_recipe'"
+                    ),
+                    "timer_id": types.Schema(
+                        type=types.Type.STRING,
+                        description="The ID of the timer to focus on, only needed when action is 'focus_timer'"
+                    ),
+                },
+                required=["action"]
+            )
+        )
+    ]
+)
+
 
 # ── Tool Handler ──────────────────────────────────────────────────
 
@@ -191,18 +279,20 @@ async def handle_search_recipes(ingredients: list) -> dict:
         # Step 1 — find matching recipes
         raw_results = await fetch_recipes_by_ingredients(ingredients)
 
+        # Step 2 — fetch steps for ALL recipes in PARALLEL (3x faster)
+        import asyncio
+        step_tasks = [fetch_recipe_steps(r["id"]) for r in raw_results]
+        all_instructions = await asyncio.gather(*step_tasks, return_exceptions=True)
+
         recipes = []
-        for r in raw_results:
+        for r, instructions in zip(raw_results, all_instructions):
             # Spoonacular gives used/missed ingredient counts
             total = r["usedIngredientCount"] + r["missedIngredientCount"]
             match_pct = round((r["usedIngredientCount"] / total) * 100) if total > 0 else 0
             missing = [i["name"] for i in r.get("missedIngredients", [])]
 
-            # STEP 1: fetch instructions
-            instructions = await fetch_recipe_steps(r["id"])
-
             steps = []
-            if instructions:
+            if not isinstance(instructions, Exception) and instructions:
                 for step in instructions[0].get("steps", []):
                     steps.append(step["step"])
 
@@ -212,12 +302,12 @@ async def handle_search_recipes(ingredients: list) -> dict:
                 "match_percentage": match_pct,
                 "missing_ingredients": missing,
                 "image": r.get("image", ""),
-                "steps": steps  # ← ADD THIS
+                "steps": steps
             }
 
             recipes.append(formatted)
 
-            # Step 3 — save to Firestore if not already there
+            # Save to Firestore if available and not already there
             already_saved = await recipe_exists(str(r["id"]))
             if not already_saved:
                 await save_recipe(formatted)
@@ -225,11 +315,57 @@ async def handle_search_recipes(ingredients: list) -> dict:
             else:
                 print(f"  → Already in Firestore: {r['title']}")
 
+        # Store in session state for frontend broadcasting
+        session_state["recipes"] = recipes
+        session_state["pending_ui_commands"].append({
+            "type": "recipe_results",
+            "recipes": recipes
+        })
+
         print(f"  OK Found {len(recipes)} recipes from Spoonacular")
         return {"recipes": recipes}
 
     except Exception as e:
         print(f"  ✗ Spoonacular error: {e}")
+        
+        # Determine if it's a quota error
+        if "402" in str(e):
+            print("  ⚠ API Quota exceeded. Using emergency fallback recipes for testing.")
+            fallback_recipes = [
+                {
+                    "id": 1001,
+                    "name": "Fallback: Creamy Garlic Pasta",
+                    "match_percentage": 100,
+                    "missing_ingredients": ["heavy cream", "parsley"],
+                    "image": "https://spoonacular.com/recipeImages/716429-312x231.jpg",
+                    "steps": [
+                        "Boil the pasta according to package instructions.",
+                        "In a skillet, sauté garlic in butter.",
+                        "Add cream and parmesan cheese.",
+                        "Toss boiled pasta in the creamy garlic sauce."
+                    ]
+                },
+                {
+                    "id": 1002,
+                    "name": "Fallback: Classic Spaghetti",
+                    "match_percentage": 50,
+                    "missing_ingredients": ["tomato sauce", "ground beef"],
+                    "image": "https://spoonacular.com/recipeImages/649187-312x231.jpg",
+                    "steps": [
+                        "Cook the spaghetti in salted boiling water.",
+                        "Brown the ground beef in a pan.",
+                        "Add tomato sauce and simmer for 10 minutes.",
+                        "Serve sauce over cooked spaghetti."
+                    ]
+                }
+            ]
+            session_state["recipes"] = fallback_recipes
+            session_state["pending_ui_commands"].append({
+                "type": "recipe_results",
+                "recipes": fallback_recipes
+            })
+            return {"recipes": fallback_recipes, "message": "API Quota exceeded. Provided fallback recipes."}
+
         return {"error": str(e), "recipes": []}
 
 
@@ -368,6 +504,33 @@ async def handle_list_all_timers() -> dict:
         return {"error": str(e), "timers": []}
 
 
+async def handle_ui_command(action: str, recipe_id: int = None, timer_id: str = None) -> dict:
+    """Handle UI commands from Gemini to control the frontend."""
+    print(f"\n  🎛️ ui_command called: action={action}, recipe_id={recipe_id}, timer_id={timer_id}")
+
+    if action == "select_recipe" and recipe_id is not None:
+        recipe = set_active_recipe(recipe_id)
+        if recipe:
+            session_state["pending_ui_commands"].append({
+                "type": "recipe_selected",
+                "recipe": recipe
+            })
+            return {"status": "ok", "message": f"Selected recipe: {recipe['name']}"}
+        else:
+            return {"error": f"Recipe {recipe_id} not found in recent results."}
+    else:
+        # For show/hide/mute/step_done/focus_timer — just queue the command
+        cmd = {
+            "type": "ui_command",
+            "action": action
+        }
+        if timer_id:
+            cmd["timer_id"] = timer_id
+            
+        session_state["pending_ui_commands"].append(cmd)
+        return {"status": "ok", "action": action}
+
+
 # ── Tool Router ───────────────────────────────────────────────────
 
 TOOL_HANDLERS = {
@@ -378,6 +541,7 @@ TOOL_HANDLERS = {
     "stop_timer": handle_stop_timer,
     "get_timer_status": handle_get_timer_status,
     "list_all_timers": handle_list_all_timers,
+    "ui_command": handle_ui_command,
 }
 
 
