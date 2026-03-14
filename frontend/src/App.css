@@ -294,6 +294,10 @@
   box-shadow: 0 0 15px rgba(239, 68, 68, 0.3);
 }
 
+.timer-widget.timer-acknowledged {
+  border-color: var(--error-color);
+}
+
 .timer-widget.timer-paused {
   border-color: rgba(251, 146, 60, 0.6);
 }
@@ -466,5 +470,259 @@
   to { 
     opacity: 1; 
     transform: translateY(0); 
+  }
+}
+
+/* ── Responsive Visibility Utilities ─────────────────────────────────────── */
+@media (min-width: 769px) {
+  .mobile-only {
+    display: none !important;
+  }
+}
+
+@media (max-width: 768px) {
+  .desktop-only {
+    display: none !important;
+  }
+}
+
+@media (min-width: 769px) {
+  .desktop-p-0 {
+    padding: 0 !important;
+  }
+}
+
+/* ── Mobile & Responsive Tweaks ─────────────────────────────────────── */
+@media (max-width: 768px) {
+  .hud-top {
+    top: 16px;
+    left: 16px;
+    right: 16px;
+  }
+
+  /* Make recipe picker cards stack vertically to fit narrow screens */
+  .recipe-picker-panel {
+    width: calc(100vw - 32px);
+    padding: 24px 16px;
+  }
+  
+  .recipe-card {
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    gap: 12px;
+  }
+
+  .recipe-card-image {
+    width: 100%;
+    height: 120px;
+  }
+
+  .recipe-card-meta {
+    justify-content: center;
+  }
+
+  /* Collapsed Mini-Player Pill */
+  .mobile-collapsed-pill {
+    top: auto;
+    bottom: 120px; 
+    left: 16px;
+    right: 16px;
+    width: auto;
+    height: 100px; /* Slightly taller for padding */
+    border-radius: 20px;
+    padding: 12px;
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+    animation: slideUpPill 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+    transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+    z-index: 50;
+    cursor: pointer;
+    background: rgba(15, 23, 42, 0.85); /* Darker backdrop for mobile clarity */
+  }
+
+  .mobile-collapsed-pill:active {
+    transform: scale(0.98);
+  }
+
+  /* Expanded Bottom Sheet */
+  .mobile-expanded-sheet {
+    top: auto;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    width: 100%;
+    height: 85vh;
+    border-radius: 24px 24px 0 0;
+    padding: 20px;
+    animation: slideUpSheet 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+    transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+    z-index: 100;
+  }
+
+  @keyframes slideUpPill {
+    from { transform: translateY(100px) scale(0.9); opacity: 0; }
+    to { transform: translateY(0) scale(1); opacity: 1; }
+  }
+
+  @keyframes slideUpSheet {
+    from { transform: translateY(100%); }
+    to { transform: translateY(0); }
+  }
+
+  /* Timers container moves up completely so pill doesn't overlap them */
+  .timers-container {
+    bottom: auto;
+    top: 70px;
+    left: 16px;
+    flex-direction: column;
+  }
+
+  .timer-widget {
+    margin-bottom: 0;
+    margin-top: -66px; /* Tuck underneath previous */
+    transform-origin: top center;
+  }
+
+  .timer-widget:first-child {
+    margin-top: 0px !important;
+  }
+
+  .timers-container:hover .timer-widget {
+    margin-top: 8px; 
+    transform: scale(1);
+    opacity: 1;
+  }
+
+  .timers-container:not(:hover) .timer-widget:nth-child(1) {
+    transform: scale(1);
+  }
+  .timers-container:not(:hover) .timer-widget:nth-child(2) {
+    transform: scale(0.93) translateY(6px);
+  }
+  .timers-container:not(:hover) .timer-widget:nth-child(3) {
+    transform: scale(0.86) translateY(12px);
+  }
+
+  /* Bottom Controls spacing */
+  .controls-dock {
+    bottom: 16px;
+  }
+
+  .btn {
+    padding: 10px 16px;
+    font-size: 0.9rem;
+  }
+}
+
+/* ── Landscape Mobile Optimizations ─────────────────────────────────── */
+@media (max-height: 500px) and (orientation: landscape) {
+  /* Side HUD items should be tightly packed */
+  .hud-top {
+    top: 8px;
+    left: 12px;
+    right: 12px;
+  }
+
+  .status-pill {
+    padding: 4px 10px;
+    font-size: 0.75rem;
+  }
+
+  /* Recipe Sidebar: Revert from bottom-sheet to side-panel to preserve center video */
+  .recipe-sidebar {
+    top: 12px;
+    right: 12px;
+    bottom: 12px;
+    left: auto;
+    width: 250px;
+    max-height: none;
+    padding: 16px;
+  }
+
+  /* Neutralize the mobile pill/sheet classes in landscape */
+  .recipe-sidebar.mobile-collapsed-pill,
+  .recipe-sidebar.mobile-expanded-sheet {
+    top: 12px;
+    right: 12px;
+    bottom: 12px;
+    left: auto;
+    width: 250px;
+    height: auto;
+    border-radius: var(--radius-md);
+    padding: 16px;
+    animation: none;
+  }
+
+  /* Compact the sidebar header in landscape so steps get more room */
+  .recipe-sidebar h2 {
+    font-size: 0.85rem;
+    line-height: 1.2;
+  }
+  .recipe-sidebar h2 + p,
+  .recipe-sidebar p {
+    font-size: 0.7rem;
+    margin-bottom: 6px !important;
+    margin-top: 2px !important;
+  }
+  .step-card { padding: 8px 10px; font-size: 0.8rem; }
+  .step-card .text-xs { font-size: 0.65rem; }
+
+  /* Recipe Picker: Horizontal flow to prevent vertical cutoff */
+  .recipe-picker-panel {
+    max-height: 90vh;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .recipe-picker-cards {
+    flex-direction: row;
+    overflow-x: auto;
+    gap: 12px;
+    padding-bottom: 8px;
+    justify-content: flex-start;
+  }
+
+  .recipe-card {
+    flex: 0 0 240px; /* Fixed width in horizontal row */
+    flex-direction: column;
+    height: auto;
+    padding: 12px;
+  }
+
+  .recipe-card-image {
+    width: 100%;
+    height: 80px;
+  }
+
+  /* Timers: Top-left stack is best here */
+  .timers-container {
+    top: 50px;
+    left: 12px;
+  }
+
+  .timer-widget {
+    width: 200px;
+    height: 60px;
+    padding: 10px 16px;
+  }
+
+  .timer-time { font-size: 1.1rem; }
+
+  /* Controls Dock: Compact */
+  .controls-dock {
+    bottom: 8px;
+    gap: 8px;
+    padding: 6px 12px;
+  }
+
+  .btn {
+    padding: 6px 12px;
+    font-size: 0.8rem;
+  }
+
+  .btn-icon {
+    width: 36px;
+    height: 36px;
   }
 }

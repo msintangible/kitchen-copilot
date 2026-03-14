@@ -3,7 +3,7 @@ main.py
 App setup and middleware only. Nothing else lives here.
 
 To run:
-  uvicorn main:app --reload --port 8000
+  uvicorn app.main:app --reload --port 8000
 """
 import sys
 import io

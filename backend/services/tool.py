@@ -373,8 +373,18 @@ async def handle_set_cooking_timer(name: str, minutes: int) -> dict:
     """Create a new cooking timer"""
     print(f"\n  ⏰ set_cooking_timer called: '{name}' for {minutes} minutes")
 
+    def timer_complete_callback(timer):
+        print(f"\n  🔔 Timer finished internally: {timer.name}")
+        # Insert a special UI command that will be intercepted by gemini_live.py
+        # to trigger a system pronunciation.
+        session_state["pending_ui_commands"].append({
+            "type": "timer_complete",
+            "timer_id": timer.id,
+            "timer_name": timer.name
+        })
+
     try:
-        timer_id = timer_manager.create_timer(name, minutes)
+        timer_id = timer_manager.create_timer(name, minutes, callback=timer_complete_callback)
         print(f"  OK Created timer '{name}' ({minutes} min) with ID: {timer_id}")
         return {
             "timer_id": timer_id,

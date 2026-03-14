@@ -213,6 +213,13 @@ async def run_gemini_session(websocket: WebSocket, session_id: str):
                                     pending = pop_pending_ui_commands()
                                     for cmd in pending:
                                         print(f"[{session_id}] 📤 Sending to frontend: {cmd.get('type')}")
+                                        
+                                        # Intercept timer complete to prompt Gemini
+                                        if cmd.get("type") == "timer_complete":
+                                            timer_name = cmd.get("timer_name", "Timer")
+                                            print(f"[{session_id}] 🗣️ Prompting Gemini to announce timer: {timer_name}")
+                                            await session.send(input=f"System Notification: The '{timer_name}' timer has just finished. Please briefly announce to the user that this timer is complete.", end_of_turn=True)
+
                                         await websocket.send_text(json.dumps(cmd))
                                 continue
 
@@ -297,12 +304,61 @@ async def run_gemini_session(websocket: WebSocket, session_id: str):
                     await asyncio.sleep(1)  # Brief pause before retrying
                     # DON'T return — the while True loop will restart session.receive()
 
-            # Run both loops concurrently
+            # Background poller: checks for async events like timer completions
+            async def poll_pending_commands():
+                """
+                Polls the pending_ui_commands queue every second.
+                This catches timer completions and other async events that
+                happen outside of Gemini tool call responses.
+                """
+                try:
+                    while True:
+                        await asyncio.sleep(1)
+                        
+                        # Also broadcast timer state periodically so the frontend
+                        # countdown stays accurate
+                        try:
+                            state = await get_active_state()
+                            if state.get("timers"):
+                                await websocket.send_text(json.dumps(state))
+                        except Exception:
+                            pass
+
+                        # Check for any queued commands (e.g. timer_complete)
+                        pending_cmds = pop_pending_ui_commands()
+                        for cmd in pending_cmds:
+                            print(f"[{session_id}] 📤 [POLL] Sending to frontend: {cmd.get('type')}")
+                            
+                            # If a timer just completed, prompt Gemini to announce it
+                            if cmd.get("type") == "timer_complete":
+                                timer_name = cmd.get("timer_name", "Timer")
+                                print(f"[{session_id}] 🗣️ [POLL] Prompting Gemini to announce timer: {timer_name}")
+                                try:
+                                    await session.send(
+                                        input=f"System Notification: The '{timer_name}' timer has just finished. Please briefly announce to the user that this timer is complete.",
+                                        end_of_turn=True
+                                    )
+                                except Exception as e:
+                                    print(f"[{session_id}] Error prompting Gemini for timer: {e}")
+                            
+                            try:
+                                await websocket.send_text(json.dumps(cmd))
+                            except Exception as e:
+                                print(f"[{session_id}] Error sending command to frontend: {e}")
+                                return
+
+                except asyncio.CancelledError:
+                    print(f"[{session_id}] Poll task cancelled.")
+                except Exception as e:
+                    print(f"[{session_id}] Poll task error: {e}")
+
+            # Run all three loops concurrently
             client_task = asyncio.create_task(receive_from_client())
             gemini_task = asyncio.create_task(receive_from_gemini())
+            poll_task = asyncio.create_task(poll_pending_commands())
 
             done, pending = await asyncio.wait(
-                [client_task, gemini_task],
+                [client_task, gemini_task, poll_task],
                 return_when=asyncio.FIRST_COMPLETED
             )
             
@@ -311,6 +367,8 @@ async def run_gemini_session(websocket: WebSocket, session_id: str):
                 print(f"[{session_id}] Client socket loop exited first.")
             if gemini_task in done:
                 print(f"[{session_id}] Gemini SDK loop exited first.")
+            if poll_task in done:
+                print(f"[{session_id}] Poll task exited first.")
             
             for task in pending:
                 task.cancel()

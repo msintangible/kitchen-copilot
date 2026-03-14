@@ -1,5 +1,5 @@
 from google.cloud import firestore
-from backend.config import PROJECT_ID, FIRESTORE_DATABASE
+from config import PROJECT_ID, FIRESTORE_DATABASE
 from datetime import datetime, timezone
 
 db = firestore.AsyncClient(project=PROJECT_ID, database=FIRESTORE_DATABASE)

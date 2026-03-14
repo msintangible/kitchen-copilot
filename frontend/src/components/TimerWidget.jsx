@@ -33,19 +33,35 @@ export function TimerWidget({ label, durationSeconds, remainingSeconds, status =
   const isDone = status === 'completed' || (status === 'running' && timeLeft <= 0);
   const isPaused = status === 'paused';
   const isCreated = status === 'created';
+  
+  // Local state to track the 6-second cool-off after completion
+  const [isAcknowledged, setIsAcknowledged] = useState(false);
+
+  useEffect(() => {
+    if (isDone) {
+      const timer = setTimeout(() => {
+        setIsAcknowledged(true);
+      }, 6000); // 6 seconds
+      return () => clearTimeout(timer);
+    } else {
+      setIsAcknowledged(false); // Reset if timer restarts
+    }
+  }, [isDone]);
 
   // Format mm:ss
   const mins = Math.floor(timeLeft / 60);
   const secs = timeLeft % 60;
   const timeString = `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
 
-  let wrapperClasses = "timer-widget ";
-  if (isDone) wrapperClasses += "timer-done animate-pulse ";
+  let wrapperClasses = "timer-widget transition-all ";
+  if (isDone && !isAcknowledged) wrapperClasses += "timer-done animate-pulse z-20 ";
+  else if (isDone && isAcknowledged) wrapperClasses += "timer-acknowledged ";
   else if (isPaused) wrapperClasses += "timer-paused ";
   else if (isCreated) wrapperClasses += "timer-created ";
 
   let iconColor = "";
-  if (isDone) iconColor = "text-error-color";
+  if (isDone && !isAcknowledged) iconColor = "text-error-color";
+  else if (isDone && isAcknowledged) iconColor = "text-error-color";
   else if (isPaused) iconColor = "text-orange-400";
   else if (isCreated) iconColor = "text-slate-400";
   else iconColor = "text-blue-400";

@@ -64,19 +64,52 @@ function App() {
     sendMessage({ clientContent: `I want to cook the ${recipe.name} recipe.` });
   };
 
-  // Derive which timers to show (max 3, focused timer always first)
+  // Track which completed timers have finished their 6-second pulse
+  const [acknowledgedTimerIds, setAcknowledgedTimerIds] = useState(new Set());
+
+  // When a timer becomes completed, wait 6 seconds then mark it as acknowledged
+  useEffect(() => {
+    const timeouts = [];
+    for (const t of timers) {
+      if (t.status === 'completed' && !acknowledgedTimerIds.has(t.id)) {
+        const timeout = setTimeout(() => {
+          setAcknowledgedTimerIds(prev => new Set([...prev, t.id]));
+        }, 6000);
+        timeouts.push(timeout);
+      }
+    }
+    return () => timeouts.forEach(clearTimeout);
+  }, [timers]);
+
+  // Clean up acknowledged IDs for timers that no longer exist
+  useEffect(() => {
+    const timerIds = new Set(timers.map(t => t.id));
+    setAcknowledgedTimerIds(prev => {
+      const cleaned = new Set([...prev].filter(id => timerIds.has(id)));
+      return cleaned.size !== prev.size ? cleaned : prev;
+    });
+  }, [timers]);
+
+  // Derive which timers to show (max 3, focused first, acknowledged-completed last)
   const displayTimers = useMemo(() => {
     let sorted = [...timers];
+
+    // Only push completed timers to the back AFTER they've been acknowledged (6s delay)
+    sorted.sort((a, b) => {
+      const aDone = acknowledgedTimerIds.has(a.id) ? 1 : 0;
+      const bDone = acknowledgedTimerIds.has(b.id) ? 1 : 0;
+      return aDone - bDone;
+    });
+
     if (focusedTimerId) {
-      // Find timer by ID or matching exactly its name
       const idx = sorted.findIndex(t => t.id === focusedTimerId || t.name === focusedTimerId);
       if (idx !== -1) {
         const [focused] = sorted.splice(idx, 1);
-        sorted.unshift(focused); // Move to front
+        sorted.unshift(focused);
       }
     }
     return sorted.slice(0, 3);
-  }, [timers, focusedTimerId]);
+  }, [timers, focusedTimerId, acknowledgedTimerIds]);
 
   const toggleActive = () => {
     if (!isActive) {
@@ -122,9 +155,9 @@ function App() {
           <span className="capitalize">{displayStatus}</span>
         </div>
         
-        {/* Recipe name pill — only when a recipe is active */}
+        {/* Recipe name pill — on mobile: always visible; on desktop: only when sidebar is closed */}
         {isActive && activeRecipe && (
-          <div className="glass-pill px-4 py-2 flex items-center gap-2">
+          <div className={`glass-pill px-4 py-2 flex items-center gap-2 ${sidebarVisible ? 'mobile-only' : ''}`}>
             <Flame size={16} className="text-orange-400" />
             <span className="text-sm font-medium">{activeRecipe.name}</span>
           </div>
@@ -166,8 +199,8 @@ function App() {
             />
           ))}
           {timers.length > 3 && (
-            <div className="text-xs text-slate-400 font-medium ml-4 absolute -top-8 left-0 pl-1 drop-shadow-md">
-              + {timers.length - 3} background timers running
+            <div className="text-xs text-slate-400 font-medium mt-2 text-center drop-shadow-md" style={{ position: 'relative', zIndex: 60 }}>
+              + {timers.length - 3}
             </div>
           )}
         </div>

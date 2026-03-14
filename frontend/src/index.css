@@ -43,6 +43,14 @@ body {
   overflow: hidden; /* Prevent scrolling, app-like feel */
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  /* Prevent tap highlight and pull-to-refresh on mobile */
+  -webkit-tap-highlight-color: transparent;
+  overscroll-behavior-y: none;
+}
+
+/* Ensure buttons and cards handle modern touch immediately */
+button, .cursor-pointer {
+  touch-action: manipulation;
 }
 
 /* Glassmorphism Utilities */

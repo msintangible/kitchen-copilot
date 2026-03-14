@@ -1,9 +1,43 @@
 import { CheckCircle2, X } from 'lucide-react';
-import { useRef, useEffect } from 'react';
+import { useRef, useEffect, useState } from 'react';
 
 export function RecipeSidebar({ recipeName, difficulty, time, steps, identifiedIngredients, onStepClick, onClose }) {
   const stepsContainerRef = useRef(null);
   const activeStepRef = useRef(null);
+  const touchStartY = useRef(0);
+  const touchEndY = useRef(0);
+  
+  // Mobile expands/collapses the sidebar like a mini-player
+  const [isExpanded, setIsExpanded] = useState(false);
+
+  const handleTouchStart = (e) => {
+    touchStartY.current = e.targetTouches[0].clientY;
+  };
+
+  const handleTouchMove = (e) => {
+    touchEndY.current = e.targetTouches[0].clientY;
+  };
+
+  const handleTouchEnd = () => {
+    if (!touchStartY.current || !touchEndY.current) return;
+    const distance = touchEndY.current - touchStartY.current;
+    
+    // Swipe down
+    if (distance > 50) {
+      if (isExpanded) {
+        setIsExpanded(false); // Collapse to pill
+      } else if (onClose) {
+        onClose(); // Close completely if already a pill
+      }
+    }
+    // Swipe up
+    else if (distance < -50 && !isExpanded) {
+      setIsExpanded(true); // Expand to full sheet
+    }
+    
+    touchStartY.current = 0;
+    touchEndY.current = 0;
+  };
 
   // Auto-scroll to next active step — pin it to the top of the container
   useEffect(() => {
@@ -46,98 +80,138 @@ export function RecipeSidebar({ recipeName, difficulty, time, steps, identifiedI
   const totalSteps = steps?.length || 1;
   const percentage = Math.round((completedCount / totalSteps) * 100);
 
+  // For the collapsed mini-player view, we only show the current step
+  const currentStepData = steps?.find(s => s.active) || steps?.[0];
+
   return (
-    <aside className="recipe-sidebar glass-panel animate-in" style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-      {/* Header - fixed at top */}
-      <div style={{ flexShrink: 0 }}>
-        <div className="flex items-center justify-between">
-          <h2 className="text-xl font-semibold tracking-tight" style={{ flex: 1 }}>{recipeName}</h2>
-          {onClose && (
-            <button 
-              onClick={onClose} 
-              className="btn-icon" 
-              style={{ width: 32, height: 32, flexShrink: 0 }}
-              title="Close sidebar"
-            >
-              <X size={16} />
-            </button>
-          )}
-        </div>
-        <p className="mt-1.5 text-[0.9rem]" style={{ marginBottom: '16px' }}>
-          <span className={`${difficultyColor} font-medium`}>{difficulty}</span> 
-          <span className="text-slate-500 mx-2">•</span> 
-          <span className="text-slate-300 font-medium">{time}</span>
-        </p>
-        <h3 className="text-xs uppercase tracking-wider text-slate-400 mb-3 font-semibold">Steps</h3>
-      </div>
-
-      {/* Steps - scrollable, fills remaining space */}
+    <aside 
+      className={`recipe-sidebar glass-panel animate-in ${isExpanded ? 'mobile-expanded-sheet' : 'mobile-collapsed-pill'}`} 
+      style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
+    >
+      {/* Mobile drag handle (Only visible on mobile) */}
       <div 
-        ref={stepsContainerRef} 
-        style={{ flex: 1, minHeight: 0, overflowY: 'auto', paddingRight: '8px', paddingBottom: '8px' }}
-        className="custom-scrollbar"
+        className="w-full flex justify-center pb-2 cursor-pointer mobile-only"
+        style={{ touchAction: 'pan-y', flexShrink: 0 }}
+        onTouchStart={handleTouchStart}
+        onTouchMove={handleTouchMove}
+        onTouchEnd={handleTouchEnd}
+        onClick={() => setIsExpanded(!isExpanded)}
       >
-        <div className="space-y-3">
-          {steps?.map((step) => (
-            <div 
-              key={step.num} 
-              ref={step.num === scrollTargetNum ? activeStepRef : null}
-              onClick={() => !step.done && onStepClick?.(step.num)}
-              className={`step-card relative ${!step.done ? 'cursor-pointer hover:brightness-110' : ''} ${step.active ? 'active scale-[1.02] shadow-lg border-accent-color/30' : ''} ${step.done ? 'border-emerald-500/20 bg-emerald-500/5' : ''}`}
-            >
-              {step.active && (
-                 <div className="absolute -left-[1px] top-4 bottom-4 w-1 bg-accent-color rounded-r-full shadow-[0_0_8px_rgba(59,130,246,0.6)]"></div>
-              )}
-              {step.done && (
-                 <div className="absolute -left-[1px] top-4 bottom-4 w-1 bg-emerald-400 rounded-r-full opacity-50"></div>
-              )}
-              <span className={`step-number ${step.active ? 'text-blue-100 font-bold tracking-widest' : step.done ? 'text-emerald-400/80 font-semibold' : ''}`}>
-                <span>Step {step.num}</span>
-                {step.done && <CheckCircle2 size={16} className="text-emerald-400 drop-shadow-md" />}
-              </span>
-              <p className={`text-sm leading-relaxed ${step.active ? 'text-white font-medium text-[0.95rem]' : step.done ? 'text-slate-400 line-through decoration-slate-600/50' : 'text-slate-300'}`}>
-                {step.text}
-              </p>
-            </div>
-          ))}
-        </div>
+        <div className="w-12 h-1.5 bg-slate-600/50 rounded-full mt-2"></div>
       </div>
 
-      {/* Ingredients - always visible, pinned below steps */}
-      {displayIngredients?.length > 0 && (
-        <div style={{ flexShrink: 0, paddingTop: '12px', paddingBottom: '8px', borderTop: '1px solid rgba(255,255,255,0.05)' }}>
-          <h3 className="text-xs uppercase tracking-wider text-slate-400 mb-2 font-semibold">Identified ({displayIngredients.length})</h3>
-          <div className="flex flex-wrap gap-2">
-            {displayIngredients.map(ing => (
-              <span 
-                key={ing} 
-                className="ingredient-tag px-3 py-1.5 rounded-full text-xs font-medium bg-slate-800/80 border border-slate-700/50 text-slate-200 shadow-sm backdrop-blur-md flex items-center gap-2"
+      {/* --- COLLAPSED MOBILE VIEW (Mini-Player) --- */}
+      {!isExpanded && currentStepData && (
+        <div className="flex-1 flex flex-col justify-between px-3 pb-3 mobile-only" onClick={() => setIsExpanded(true)}>
+          <div className="flex items-center justify-between mb-1.5">
+            <span className="text-[10px] font-bold text-accent-color uppercase tracking-widest">Step {currentStepData.num} of {totalSteps}</span>
+            <span className="text-[10px] font-bold text-slate-400">{percentage}%</span>
+          </div>
+          <p className="text-sm font-semibold text-white line-clamp-2 leading-tight">
+            {currentStepData.text}
+          </p>
+          <div className="h-1.5 w-full bg-slate-800/80 rounded-full overflow-hidden mt-3 border border-white/5">
+            <div className="h-full bg-accent-color shadow-[0_0_8px_rgba(59,130,246,0.5)] transition-all duration-700 ease-out" style={{ width: `${percentage}%` }}></div>
+          </div>
+        </div>
+      )}
+
+      {/* --- EXPANDED VIEW (Desktop or Expanded Mobile) --- */}
+      <div className={`flex-1 flex-col overflow-hidden ${isExpanded ? 'flex' : 'desktop-only flex shadow-none border-none bg-transparent'}`}>
+        {/* Header - fixed at top */}
+        <div style={{ flexShrink: 0 }} className="p-1 desktop-p-0">
+          <div className="flex items-center justify-between">
+            <h2 className="text-xl font-semibold tracking-tight" style={{ flex: 1 }}>{recipeName}</h2>
+            {onClose && (
+              <button 
+                onClick={(e) => { e.stopPropagation(); onClose(); }} 
+                className="btn-icon" 
+                style={{ width: 44, height: 44, flexShrink: 0 }}
+                title="Close sidebar"
               >
-                <div className="w-1.5 h-1.5 rounded-full bg-emerald-400/80"></div>
-                {ing}
-              </span>
+                <X size={20} />
+              </button>
+            )}
+          </div>
+          <p className="mt-1.5 text-[0.9rem]" style={{ marginBottom: '16px' }}>
+            <span className={`${difficultyColor} font-medium`}>{difficulty}</span> 
+            <span className="text-slate-500 mx-2">•</span> 
+            <span className="text-slate-300 font-medium">{time}</span>
+          </p>
+          <h3 className="text-xs uppercase tracking-wider text-slate-400 mb-3 font-semibold">Steps</h3>
+        </div>
+
+        {/* Steps - scrollable, fills remaining space */}
+        <div 
+          ref={stepsContainerRef} 
+          style={{ flex: 1, minHeight: 0, overflowY: 'auto', paddingRight: '8px', paddingBottom: '8px' }}
+          className="custom-scrollbar"
+          onTouchStart={handleTouchStart}
+          onTouchMove={handleTouchMove}
+          onTouchEnd={handleTouchEnd}
+        >
+          <div className="space-y-3">
+            {steps?.map((step) => (
+              <div 
+                key={step.num} 
+                ref={step.num === scrollTargetNum ? activeStepRef : null}
+                onClick={() => !step.done && onStepClick?.(step.num)}
+                className={`step-card relative ${!step.done ? 'cursor-pointer hover:brightness-110' : ''} ${step.active ? 'active scale-[1.02] shadow-lg border-accent-color/30' : ''} ${step.done ? 'border-emerald-500/20 bg-emerald-500/5' : ''}`}
+              >
+                {step.active && (
+                   <div className="absolute -left-[1px] top-4 bottom-4 w-1 bg-accent-color rounded-r-full shadow-[0_0_8px_rgba(59,130,246,0.6)]"></div>
+                )}
+                {step.done && (
+                   <div className="absolute -left-[1px] top-4 bottom-4 w-1 bg-emerald-400 rounded-r-full opacity-50"></div>
+                )}
+                <span className={`step-number ${step.active ? 'text-blue-100 font-bold tracking-widest' : step.done ? 'text-emerald-400/80 font-semibold' : ''}`}>
+                  <span>Step {step.num}</span>
+                  {step.done && <CheckCircle2 size={16} className="text-emerald-400 drop-shadow-md" />}
+                </span>
+                <p className={`text-sm leading-relaxed ${step.active ? 'text-white font-medium text-[0.95rem]' : step.done ? 'text-slate-400 line-through decoration-slate-600/50' : 'text-slate-300'}`}>
+                  {step.text}
+                </p>
+              </div>
             ))}
           </div>
         </div>
-      )}
 
-      {/* Progress bar - always visible at bottom */}
-      {steps && steps.length > 0 && (
-        <div style={{ flexShrink: 0, padding: '12px 0 4px', borderTop: '1px solid rgba(255,255,255,0.05)' }}>
-          <div className="flex justify-between items-center mb-2">
-            <span className="text-xs font-semibold uppercase tracking-wider text-slate-300">Total Progress</span>
-            <span className="text-sm font-bold text-accent-color">{percentage}%</span>
-          </div>
-          <div className="h-2 w-full bg-slate-800 rounded-full overflow-hidden shadow-inner">
-            <div 
-              className="h-full bg-accent-color transition-all duration-700 ease-out rounded-full relative"
-              style={{ width: `${percentage}%` }}
-            >
-              <div className="absolute inset-0 bg-white/20 w-full" style={{ background: 'linear-gradient(90deg, transparent, rgba(255,255,255,0.3), transparent)' }}></div>
+        {/* Ingredients - always visible, pinned below steps */}
+        {displayIngredients?.length > 0 && (
+          <div style={{ flexShrink: 0, paddingTop: '12px', paddingBottom: '8px', borderTop: '1px solid rgba(255,255,255,0.05)' }}>
+            <h3 className="text-xs uppercase tracking-wider text-slate-400 mb-2 font-semibold">Identified ({displayIngredients.length})</h3>
+            <div className="flex flex-wrap gap-2">
+              {displayIngredients.map(ing => (
+                <span 
+                  key={ing} 
+                  className="ingredient-tag px-3 py-1.5 rounded-full text-xs font-medium bg-slate-800/80 border border-slate-700/50 text-slate-200 shadow-sm backdrop-blur-md flex items-center gap-2"
+                >
+                  <div className="w-1.5 h-1.5 rounded-full bg-emerald-400/80"></div>
+                  {ing}
+                </span>
+              ))}
             </div>
           </div>
-        </div>
-      )}
+        )}
+
+        {/* Progress bar - always visible at bottom */}
+        {steps && steps.length > 0 && (
+          <div style={{ flexShrink: 0, padding: '12px 0 4px', borderTop: '1px solid rgba(255,255,255,0.05)' }}>
+            <div className="flex justify-between items-center mb-2">
+              <span className="text-xs font-semibold uppercase tracking-wider text-slate-300">Total Progress</span>
+              <span className="text-sm font-bold text-accent-color">{percentage}%</span>
+            </div>
+            <div className="h-2 w-full bg-slate-800 rounded-full overflow-hidden shadow-inner">
+              <div 
+                className="h-full bg-accent-color transition-all duration-700 ease-out rounded-full relative"
+                style={{ width: `${percentage}%` }}
+              >
+                <div className="absolute inset-0 bg-white/20 w-full" style={{ background: 'linear-gradient(90deg, transparent, rgba(255,255,255,0.3), transparent)' }}></div>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
     </aside>
   );
 }
