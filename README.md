@@ -8,26 +8,55 @@ An AI-powered cooking assistant that helps you find recipes and manage cooking t
 - **Cooking Timers**: Set, start, pause, and stop multiple concurrent timers for different cooking steps
 - **AI Chat Interface**: Natural language interaction with Gemini AI
 
-## Setup
+## 🚀 Setup & Running Locally
 
-1. **Install dependencies:**
+Kitchen Copilot is built with a decoupled architecture: a FastAPI backend and a React/Vite frontend. You will need two terminal windows to run the application locally.
+
+### 1. Backend Setup
+
+1. Open your first terminal and navigate to the project root.
+2. Install the necessary Python dependencies:
    ```bash
    pip install -r requirements.txt
    ```
-
-2. **Set up API keys:**
-   - Get a [Gemini API key](https://ai.google.dev/gemini-api/docs/api-key)
-   - Get a [Spoonacular API key](https://spoonacular.com/food-api)
-   - Create a `.env` file:
-     ```
-     GEMINI_API_KEY=your_gemini_api_key_here
-     SPOONACULAR_API_KEY=your_spoonacular_api_key_here
-     ```
-
-3. **Run the application:**
-   ```bash
-   python main.py
+3. Create a `.env` file in the `backend/` directory (or project root) and add your API keys:
+   ```env
+   GEMINI_API_KEY=your_gemini_api_key_here
+   SPOONACULAR_API_KEY=your_spoonacular_api_key_here
    ```
+4. Start the FastAPI WebSocket server:
+   ```bash
+   python backend/app/main.py
+   # Or alternatively: uvicorn backend.app.main:app --reload --port 8000
+   ```
+
+### 2. Frontend Setup
+
+1. Open your second terminal and navigate to the frontend directory:
+   ```bash
+   cd frontend
+   ```
+2. Install the Node.js dependencies:
+   ```bash
+   npm install
+   ```
+3. Start the Vite development server:
+   ```bash
+   npm run dev
+   ```
+4. Open your browser and navigate to `http://localhost:5173` (or the port Vite provides). Grant camera and microphone permissions when prompted!
+
+
+## 🧪 Trying it Out
+
+Curious to see what Kitchen Copilot can do? Once you have the app running, try these things:
+
+1. **Connect**: Click the "Start Cooking" microphone button. Make sure your browser has Camera and Microphone permissions.
+2. **Find a Recipe**: Hold up an ingredient to your camera or say, *"I have an onion, garlic, and chicken. What can we make?"*
+3. **Hands-Free Navigation**: When the recipe options appear, don't tap the screen! Just say *"I'll take the first one"* to see the app select it and show the steps.
+4. **Voice Timers**: Tell the copilot: *"Set a timer for 10 seconds"* and watch the floating widget handle the countdown.
+5. **Natural Interruptions**: While it's reading a step, try interrupting it with *"Wait, actually..."* to see how it pauses gracefully.
+6. **Finish Up**: Say *"Stop session"* when you're done to safely disconnect.
 
 ## Timer Functionality
 

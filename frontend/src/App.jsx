@@ -6,9 +6,10 @@ import { RecipeSidebar } from './components/RecipeSidebar';
 import { RecipePicker } from './components/RecipePicker';
 import { TimerWidget } from './components/TimerWidget';
 import './App.css';
+import logoUrl from './assets/logo.png';
 
 // Replace with actual cloud run URL when deploying
-const WS_URL = 'ws://localhost:8000/ws';
+const WS_URL = 'wss://kitchen-copilot-backend-769490847746.us-central1.run.app/ws';
 
 // Command hints that rotate on the idle start screen
 const COMMAND_HINTS = [
@@ -239,8 +240,12 @@ function App() {
       {/* Background Video Layer */}
       <div className={`main-viewport ${!isActive ? 'no-video' : ''}`}>
         {!isActive && (
-          <div className="flex flex-col items-center gap-4 text-center">
-            <Camera className="placeholder-icon" />
+          <div className="flex flex-col items-center gap-4 text-center mb-6">
+            <img 
+              src={logoUrl} 
+              alt="Kitchen Copilot Logo" 
+              style={{ width: '120px', height: '120px', objectFit: 'contain' }} 
+            />
             <h1 className="text-2xl font-light tracking-wide text-white">Kitchen Copilot</h1>
             <p 
               key={hintIndex}
