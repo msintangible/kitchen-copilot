@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Camera, Mic, MicOff, Play, Square, Flame } from 'lucide-react';
 import { useMediaCapture } from './hooks/useMediaCapture';
 import { useCopilotWebSocket } from './hooks/useCopilotWebSocket';
@@ -9,6 +9,25 @@ import './App.css';
 
 // Replace with actual cloud run URL when deploying
 const WS_URL = 'ws://localhost:8000/ws';
+
+// Command hints that rotate on the idle start screen
+const COMMAND_HINTS = [
+  '"I have x ingredients"',
+  '"Set a 10 minute timer"',
+  '"Next step"',
+  '"I\'m done with this step"',
+  '"Show recipe"',
+  '"Hide recipe"',
+  '"Mute"',
+  '"What step am I on?"',
+  '"How much time is left?"',
+  '"Show x timer"',
+  '"What can I cook with these ..."',
+  '"Stop session"',
+];
+
+const INACTIVITY_TIMEOUT_MS = 15 * 60 * 1000; // 15 minutes
+const RECIPE_COMPLETE_COUNTDOWN = 15; // seconds
 
 function App() {
   const { videoRef, isCapturing, isMuted, startCapture, stopCapture, toggleMute } = useMediaCapture();
@@ -30,6 +49,18 @@ function App() {
   const [isActive, setIsActive] = useState(false);
   const [focusedTimerId, setFocusedTimerId] = useState(null);
   
+  // Rotating hint state
+  const [hintIndex, setHintIndex] = useState(0);
+  const [hintVisible, setHintVisible] = useState(true);
+
+  // Recipe completion auto-end state
+  const [completionCountdown, setCompletionCountdown] = useState(null);
+
+  // Inactivity detection state
+  const lastActivityRef = useRef(Date.now());
+  const [showInactivityPrompt, setShowInactivityPrompt] = useState(false);
+  const [showEndSessionConfirm, setShowEndSessionConfirm] = useState(false);
+  
   // Derive status from session state
   const agentStatus = isActive ? 'listening' : 'idle'; 
   const displayStatus = isActive ? 'Live' : 'Idle';
@@ -41,8 +72,11 @@ function App() {
       if (command.action === 'focus_timer' && command.timer_id) {
         setFocusedTimerId(command.timer_id);
       }
+      if (command.action === 'stop_session') {
+        setShowEndSessionConfirm(true);
+      }
     };
-  }, [toggleMute, uiCommandCallbackRef]);
+  }, [toggleMute, uiCommandCallbackRef, stopCapture, disconnect]);
 
   // Build steps array from active recipe
   const activeSteps = activeRecipe?.steps?.map((text, i) => ({
@@ -54,53 +88,52 @@ function App() {
 
   // Handle step click from sidebar
   const handleStepClick = (stepNum) => {
-    setCurrentStep(stepNum); // Move to the clicked step (marks previous as done)
+    setCurrentStep(stepNum);
   };
 
   // Handle recipe selection from picker
   const handleRecipeSelect = (recipe) => {
     console.log("User clicked recipe:", recipe.name);
-    // Send message to Gemini stating the user picked the recipe
     sendMessage({ clientContent: `I want to cook the ${recipe.name} recipe.` });
   };
 
-  // Track which completed timers have finished their 6-second pulse
-  const [acknowledgedTimerIds, setAcknowledgedTimerIds] = useState(new Set());
-
-  // When a timer becomes completed, wait 6 seconds then mark it as acknowledged
+  // ── Rotating Command Hints ──────────────────────────────────
   useEffect(() => {
-    const timeouts = [];
+    if (isActive) return;
+    const interval = setInterval(() => {
+      setHintIndex(prev => (prev + 1) % COMMAND_HINTS.length);
+    }, 2500);
+    return () => clearInterval(interval);
+  }, [isActive]);
+
+  // ── Timer Acknowledgment (6-second pulse) ──────────────────
+  const [acknowledgedTimerIds, setAcknowledgedTimerIds] = useState(new Set());
+  const pendingAckTimeouts = useRef(new Set());
+
+  useEffect(() => {
     for (const t of timers) {
-      if (t.status === 'completed' && !acknowledgedTimerIds.has(t.id)) {
-        const timeout = setTimeout(() => {
+      if (t.status === 'completed' && !pendingAckTimeouts.current.has(t.id)) {
+        pendingAckTimeouts.current.add(t.id);
+        setTimeout(() => {
           setAcknowledgedTimerIds(prev => new Set([...prev, t.id]));
+          pendingAckTimeouts.current.delete(t.id);
         }, 6000);
-        timeouts.push(timeout);
       }
     }
-    return () => timeouts.forEach(clearTimeout);
-  }, [timers]);
-
-  // Clean up acknowledged IDs for timers that no longer exist
-  useEffect(() => {
-    const timerIds = new Set(timers.map(t => t.id));
+    const currentIds = new Set(timers.map(t => t.id));
     setAcknowledgedTimerIds(prev => {
-      const cleaned = new Set([...prev].filter(id => timerIds.has(id)));
+      const cleaned = new Set([...prev].filter(id => currentIds.has(id)));
       return cleaned.size !== prev.size ? cleaned : prev;
     });
   }, [timers]);
 
-  // Derive which timers to show (max 3, focused first, acknowledged-completed last)
   const displayTimers = useMemo(() => {
     let sorted = [...timers];
-
-    // Only push completed timers to the back AFTER they've been acknowledged (6s delay)
     sorted.sort((a, b) => {
       const aDone = acknowledgedTimerIds.has(a.id) ? 1 : 0;
       const bDone = acknowledgedTimerIds.has(b.id) ? 1 : 0;
       return aDone - bDone;
     });
-
     if (focusedTimerId) {
       const idx = sorted.findIndex(t => t.id === focusedTimerId || t.name === focusedTimerId);
       if (idx !== -1) {
@@ -111,11 +144,88 @@ function App() {
     return sorted.slice(0, 3);
   }, [timers, focusedTimerId, acknowledgedTimerIds]);
 
+  // ── Recipe Completion Auto-End ──────────────────────────────
+  const allStepsDone = activeSteps.length > 0 && activeSteps.every(s => s.done);
+  const completionTriggered = useRef(false);
+
+  useEffect(() => {
+    if (allStepsDone && isActive && !completionTriggered.current) {
+      completionTriggered.current = true;
+      sendMessage({ clientContent: "System: The user has completed all recipe steps. Congratulate them briefly and let them know the session will end in 15 seconds unless they want to continue." });
+      setCompletionCountdown(RECIPE_COMPLETE_COUNTDOWN);
+    }
+    if (!allStepsDone) {
+      completionTriggered.current = false;
+      setCompletionCountdown(null);
+    }
+  }, [allStepsDone, isActive]);
+
+  useEffect(() => {
+    if (completionCountdown === null || completionCountdown < 0) return;
+    if (completionCountdown === 0) {
+      stopCapture();
+      disconnect();
+      setIsActive(false);
+      setCompletionCountdown(null);
+      completionTriggered.current = false;
+      return;
+    }
+    const timer = setTimeout(() => setCompletionCountdown(prev => prev - 1), 1000);
+    return () => clearTimeout(timer);
+  }, [completionCountdown]);
+
+  const handleContinueSession = () => {
+    setCompletionCountdown(null);
+    completionTriggered.current = true; // Prevent re-triggering
+  };
+
+  // ── Inactivity Detection ──────────────────────────────────
+  useEffect(() => {
+    if (!isActive) return;
+
+    const resetActivity = () => {
+      lastActivityRef.current = Date.now();
+      setShowInactivityPrompt(false);
+    };
+
+    window.addEventListener('copilot-audio-chunk', resetActivity);
+    window.addEventListener('click', resetActivity);
+    window.addEventListener('touchstart', resetActivity);
+
+    const checkInterval = setInterval(() => {
+      const elapsed = Date.now() - lastActivityRef.current;
+      if (elapsed >= INACTIVITY_TIMEOUT_MS && !showInactivityPrompt) {
+        setShowInactivityPrompt(true);
+        sendMessage({ clientContent: "System: The user has been inactive for a while. Ask them briefly if they are still there." });
+      }
+    }, 30000); // Check every 30 seconds
+
+    return () => {
+      window.removeEventListener('copilot-audio-chunk', resetActivity);
+      window.removeEventListener('click', resetActivity);
+      window.removeEventListener('touchstart', resetActivity);
+      clearInterval(checkInterval);
+    };
+  }, [isActive, showInactivityPrompt, sendMessage]);
+
+  const handleInactivityYes = () => {
+    lastActivityRef.current = Date.now();
+    setShowInactivityPrompt(false);
+  };
+
+  const handleInactivityNo = () => {
+    setShowInactivityPrompt(false);
+    stopCapture();
+    disconnect();
+    setIsActive(false);
+  };
+
   const toggleActive = () => {
     if (!isActive) {
       startCapture();
       connect();
       setIsActive(true);
+      lastActivityRef.current = Date.now();
     } else {
       stopCapture();
       disconnect();
@@ -132,7 +242,13 @@ function App() {
           <div className="flex flex-col items-center gap-4 text-center">
             <Camera className="placeholder-icon" />
             <h1 className="text-2xl font-light tracking-wide text-white">Kitchen Copilot</h1>
-            <p className="text-slate-400">Ready to start cooking?</p>
+            <p 
+              key={hintIndex}
+              className="text-slate-400 command-hint"
+              style={{ minHeight: '1.5em' }}
+            >
+              {COMMAND_HINTS[hintIndex]}
+            </p>
           </div>
         )}
         {/* The active video feed */}
@@ -203,6 +319,83 @@ function App() {
               + {timers.length - 3}
             </div>
           )}
+        </div>
+      )}
+
+      {/* Recipe Completion Countdown Popup */}
+      {completionCountdown !== null && (
+        <div className="popup-overlay">
+          <div className="glass-panel animate-in">
+            <span className="popup-emoji">🎉</span>
+            <h2>Recipe Complete!</h2>
+            <p>
+              Session ending in <span className="countdown-number">{completionCountdown}s</span>
+            </p>
+            <div className="popup-actions">
+              <button 
+                onClick={handleContinueSession}
+                className="btn btn-primary"
+              >
+                Keep Cooking
+              </button>
+              <button 
+                onClick={() => { stopCapture(); disconnect(); setIsActive(false); setCompletionCountdown(null); }}
+                className="btn btn-danger"
+              >
+                End Session
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Inactivity Check Popup */}
+      {showInactivityPrompt && (
+        <div className="popup-overlay">
+          <div className="glass-panel animate-in">
+            <span className="popup-emoji">👋</span>
+            <h2>Are you still there?</h2>
+            <p>
+              You've been quiet for a while. Want to keep cooking?
+            </p>
+            <div className="popup-actions">
+              <button onClick={handleInactivityYes} className="btn btn-primary">
+                Yes, I'm here!
+              </button>
+              <button onClick={handleInactivityNo} className="btn btn-danger">
+                End Session
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* End Session Confirmation Popup (Voice triggered) */}
+      {showEndSessionConfirm && (
+        <div className="popup-overlay">
+          <div className="glass-panel animate-in">
+            <span className="popup-emoji">👋</span>
+            <h2>End Session?</h2>
+            <p>
+              Are you sure you want to stop the cooking session?
+            </p>
+            <div className="popup-actions">
+              <button 
+                onClick={() => {
+                  stopCapture();
+                  disconnect();
+                  setIsActive(false);
+                  setShowEndSessionConfirm(false);
+                }} 
+                className="btn btn-danger"
+              >
+                End Session
+              </button>
+              <button onClick={() => setShowEndSessionConfirm(false)} className="btn btn-primary">
+                Keep Cooking
+              </button>
+            </div>
+          </div>
         </div>
       )}
 

@@ -71,53 +71,81 @@ def reset_backend_state():
         print(f"Error resetting timers: {e}")
 
 
-# ── Real Spoonacular calls ────────────────────────────────────────
+# ── Gemini-powered recipe generation ─────────────────────────────────
 
-async def fetch_recipes_by_ingredients(ingredients: list) -> list:
+
+async def fetch_recipe_by_name(recipe_name: str) -> dict:
     """
-    Step 1: Search by ingredients — returns basic recipe matches.
-    Endpoint: /recipes/findByIngredients
+    Use Gemini to generate a clean, simple, classic version of a recipe by name.
+    Much better than Spoonacular for name-based searches — Gemini gives standard
+    home-cooking recipes, not overcomplicated restaurant versions.
     """
-    async with httpx.AsyncClient() as http:
-        response = await http.get(
-            f"{SPOONACULAR_BASE}/recipes/findByIngredients",
-            params={
-                "apiKey": SPOONACULAR_KEY,
-                "ingredients": ",".join(ingredients),
-                "number": 3,           # top 3 results
-                "ranking": 1,          # maximise used ingredients
-                "ignorePantry": True   # ignore salt, water etc
-            }
+    import json
+    import hashlib
+
+    prompt = f"""You are a practical home-cooking assistant. Generate a simple, classic, straightforward recipe for "{recipe_name}".
+
+RULES:
+- This is a HOME COOKING recipe — keep it simple and accessible.
+- Do NOT add exotic or unnecessary ingredients. Stick to the classic version.
+- Steps should be clear, numbered, and each step is ONE action.
+- Aim for 6-12 steps. Each step should be 1-2 sentences maximum.
+- Ingredients should include realistic measurements (e.g. "2 cups", "1 tablespoon").
+
+Return ONLY valid JSON in exactly this format, no markdown, no extra text:
+{{
+  "name": "Classic Spaghetti Bolognese",
+  "ingredients": ["400g spaghetti", "500g ground beef", "1 onion, diced", "2 cloves garlic", "400g canned tomatoes", "2 tablespoons olive oil", "salt and pepper to taste"],
+  "steps": [
+    "Boil a large pot of salted water.",
+    "Cook spaghetti according to package instructions until al dente.",
+    "While pasta cooks, heat olive oil in a large pan over medium heat.",
+    "Add onion and garlic, sauté for 3-4 minutes until softened.",
+    "Add ground beef and cook, breaking it up, until browned.",
+    "Pour in the canned tomatoes, season with salt and pepper.",
+    "Simmer the sauce for 15 minutes until slightly thickened.",
+    "Drain the pasta and serve topped with the Bolognese sauce."
+  ]
+}}"""
+
+    try:
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json"
+            )
         )
-        response.raise_for_status()
-        return response.json()
+        data = json.loads(response.text)
+
+        # Generate a stable integer ID from the recipe name (so Firestore caching works)
+        stable_id = int(hashlib.md5(recipe_name.lower().encode()).hexdigest()[:8], 16)
+
+        return {
+            "id": stable_id,
+            "name": data.get("name", recipe_name.title()),
+            "image": "",  # No image for AI-generated recipes
+            "steps": data.get("steps", []),
+            "missing_ingredients": data.get("ingredients", []),
+            "match_percentage": 100,
+        }
+
+    except Exception as e:
+        print(f"  ⚠ Gemini recipe generation failed: {e}")
+        return {}
 
 
-async def fetch_recipe_steps(recipe_id: int) -> list:
-    """
-    Step 2: Get full step-by-step instructions for a recipe.
-    Endpoint: /recipes/{id}/analyzedInstructions
-    Called separately because findByIngredients doesn't include steps.
-    """
-    async with httpx.AsyncClient() as http:
-        response = await http.get(
-            f"{SPOONACULAR_BASE}/recipes/{recipe_id}/analyzedInstructions",
-            params={"apiKey": SPOONACULAR_KEY}
-        )
-        response.raise_for_status()
-        return response.json()
 
-
-# ── Tool Definition ───────────────────────────────────────────────
+# ── Tool Definitions ───────────────────────────────────────────────
 
 search_recipes_tool = types.Tool(
     function_declarations=[
         types.FunctionDeclaration(
             name="search_recipes",
             description=(
-                "Search for recipes that match a list of ingredients. "
-                "Call this when the user mentions ingredients they have "
-                "or wants to know what they can cook. "
+                "Search for recipes that match a list of ingredients the user has. "
+                "Call this ONLY when the user mentions specific ingredients they have available "
+                "and wants to know what they can cook with them. "
                 "Returns top 3 recipes ranked by ingredient match."
             ),
             parameters=types.Schema(
@@ -130,6 +158,32 @@ search_recipes_tool = types.Tool(
                     ),
                 },
                 required=["ingredients"]
+            )
+        )
+    ]
+)
+
+search_recipe_by_name_tool = types.Tool(
+    function_declarations=[
+        types.FunctionDeclaration(
+            name="search_recipe_by_name",
+            description=(
+                "Look up a specific classic recipe by name. "
+                "Use this when the user tells you EXACTLY what dish they want to cook, "
+                "for example 'I want to make fried rice', 'let's cook chicken bolognese', "
+                "or 'make me a classic carbonara'. "
+                "This finds the most popular standard version of that recipe directly "
+                "and goes straight to cooking — no ingredient matching needed."
+            ),
+            parameters=types.Schema(
+                type=types.Type.OBJECT,
+                properties={
+                    "recipe_name": types.Schema(
+                        type=types.Type.STRING,
+                        description="The name of the dish the user wants to cook, e.g. 'fried rice', 'chicken bolognese'"
+                    ),
+                },
+                required=["recipe_name"]
             )
         )
     ]
@@ -245,14 +299,14 @@ ui_command_tool = types.Tool(
                 "Send a UI command to the frontend app. Use this when the user asks to "
                 "show or hide the recipe sidebar, mute/unmute their microphone, or mark "
                 "the current cooking step as done. Valid actions: "
-                "'show_sidebar', 'hide_sidebar', 'toggle_mute', 'step_done', 'select_recipe'."
+                "'show_sidebar', 'hide_sidebar', 'toggle_mute', 'step_done', 'select_recipe', 'stop_session'."
             ),
             parameters=types.Schema(
                 type=types.Type.OBJECT,
                 properties={
                     "action": types.Schema(
                         type=types.Type.STRING,
-                        description="The UI action to perform: 'show_sidebar', 'hide_sidebar', 'toggle_mute', 'step_done', 'select_recipe', or 'focus_timer'"
+                        description="The UI action to perform: 'show_sidebar', 'hide_sidebar', 'toggle_mute', 'step_done', 'select_recipe', 'focus_timer', or 'stop_session'"
                     ),
                     "recipe_id": types.Schema(
                         type=types.Type.INTEGER,
@@ -262,6 +316,10 @@ ui_command_tool = types.Tool(
                         type=types.Type.STRING,
                         description="The ID of the timer to focus on, only needed when action is 'focus_timer'"
                     ),
+                    "step_number": types.Schema(
+                        type=types.Type.INTEGER,
+                        description="The step number to mark as done (1-indexed), only needed when action is 'step_done'. If not provided, the current step is marked done and the next step becomes active."
+                    ),
                 },
                 required=["action"]
             )
@@ -270,103 +328,127 @@ ui_command_tool = types.Tool(
 )
 
 
-# ── Tool Handler ──────────────────────────────────────────────────
+# ── Tool Handlers ─────────────────────────────────────────────────
 
 async def handle_search_recipes(ingredients: list) -> dict:
+    """Use Gemini to suggest 3 practical recipes based on available ingredients."""
     print(f"\n  🔧 search_recipes called with: {ingredients}")
+    import json, hashlib
+
+    ingredients_list = ", ".join(ingredients)
+
+    prompt = f"""You are a practical home-cooking assistant. The user has these ingredients: {ingredients_list}.
+
+Suggest exactly 3 simple, home-cooking recipes they could make. Prioritise recipes that use MOST of the listed ingredients.
+
+RULES:
+- Keep recipes simple and classic (e.g. fried rice, omelette, pasta) — not gourmet versions.
+- Steps should be clear, each step ONE action, 1-2 sentences max. Aim for 6-10 steps.
+- All ingredient amounts must have measurements ("2 cups", "400g", "1 tablespoon").
+- estimated_time: realistic total cook + prep time as a short string like "15 min" or "30 min".
+- needs_count: how many EXTRA ingredients (not in the user's list) the recipe requires. Integer.
+
+Return ONLY valid JSON — no markdown, no extra text:
+{{
+  "recipes": [
+    {{
+      "name": "Classic Omelette",
+      "estimated_time": "10 min",
+      "needs_count": 1,
+      "ingredients": ["3 eggs", "1 tablespoon butter", "salt and pepper"],
+      "steps": [
+        "Crack the eggs into a bowl and whisk well.",
+        "Heat butter in a non-stick pan over medium heat.",
+        "Pour in the eggs and let them set slightly at the edges.",
+        "Fold the omelette in half and slide onto a plate."
+      ]
+    }}
+  ]
+}}"""
 
     try:
-        # Step 1 — find matching recipes
-        raw_results = await fetch_recipes_by_ingredients(ingredients)
-
-        # Step 2 — fetch steps for ALL recipes in PARALLEL (3x faster)
-        import asyncio
-        step_tasks = [fetch_recipe_steps(r["id"]) for r in raw_results]
-        all_instructions = await asyncio.gather(*step_tasks, return_exceptions=True)
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json"
+            )
+        )
+        data = json.loads(response.text)
+        raw_recipes = data.get("recipes", [])
 
         recipes = []
-        for r, instructions in zip(raw_results, all_instructions):
-            # Spoonacular gives used/missed ingredient counts
-            total = r["usedIngredientCount"] + r["missedIngredientCount"]
-            match_pct = round((r["usedIngredientCount"] / total) * 100) if total > 0 else 0
-            missing = [i["name"] for i in r.get("missedIngredients", [])]
-
-            steps = []
-            if not isinstance(instructions, Exception) and instructions:
-                for step in instructions[0].get("steps", []):
-                    steps.append(step["step"])
+        for r in raw_recipes[:3]:
+            name = r.get("name", "Recipe")
+            stable_id = int(hashlib.md5(name.lower().encode()).hexdigest()[:8], 16)
+            image_url = f"https://source.unsplash.com/400x300/?{name.replace(' ', '+')},food,cooking"
 
             formatted = {
-                "id": r["id"],
-                "name": r["title"],
-                "match_percentage": match_pct,
-                "missing_ingredients": missing,
-                "image": r.get("image", ""),
-                "steps": steps
+                "id": stable_id,
+                "name": name,
+                "estimated_time": r.get("estimated_time", ""),
+                "needs_count": r.get("needs_count", 0),
+                "match_percentage": 100,  # kept for backward compat
+                "missing_ingredients": r.get("ingredients", []),
+                "image": "",  # emoji handled in the frontend
+                "steps": r.get("steps", [])
             }
-
             recipes.append(formatted)
 
-            # Save to Firestore if available and not already there
-            already_saved = await recipe_exists(str(r["id"]))
+            already_saved = await recipe_exists(str(stable_id))
             if not already_saved:
                 await save_recipe(formatted)
-                print("saved to firestore database")
-            else:
-                print(f"  → Already in Firestore: {r['title']}")
 
-        # Store in session state for frontend broadcasting
         session_state["recipes"] = recipes
         session_state["pending_ui_commands"].append({
             "type": "recipe_results",
             "recipes": recipes
         })
 
-        print(f"  OK Found {len(recipes)} recipes from Spoonacular")
+        print(f"  ✓ Generated {len(recipes)} recipes via Gemini")
         return {"recipes": recipes}
 
     except Exception as e:
-        print(f"  ✗ Spoonacular error: {e}")
-        
-        # Determine if it's a quota error
-        if "402" in str(e):
-            print("  ⚠ API Quota exceeded. Using emergency fallback recipes for testing.")
-            fallback_recipes = [
-                {
-                    "id": 1001,
-                    "name": "Fallback: Creamy Garlic Pasta",
-                    "match_percentage": 100,
-                    "missing_ingredients": ["heavy cream", "parsley"],
-                    "image": "https://spoonacular.com/recipeImages/716429-312x231.jpg",
-                    "steps": [
-                        "Boil the pasta according to package instructions.",
-                        "In a skillet, sauté garlic in butter.",
-                        "Add cream and parmesan cheese.",
-                        "Toss boiled pasta in the creamy garlic sauce."
-                    ]
-                },
-                {
-                    "id": 1002,
-                    "name": "Fallback: Classic Spaghetti",
-                    "match_percentage": 50,
-                    "missing_ingredients": ["tomato sauce", "ground beef"],
-                    "image": "https://spoonacular.com/recipeImages/649187-312x231.jpg",
-                    "steps": [
-                        "Cook the spaghetti in salted boiling water.",
-                        "Brown the ground beef in a pan.",
-                        "Add tomato sauce and simmer for 10 minutes.",
-                        "Serve sauce over cooked spaghetti."
-                    ]
-                }
-            ]
-            session_state["recipes"] = fallback_recipes
-            session_state["pending_ui_commands"].append({
-                "type": "recipe_results",
-                "recipes": fallback_recipes
-            })
-            return {"recipes": fallback_recipes, "message": "API Quota exceeded. Provided fallback recipes."}
-
+        print(f"  ✗ Gemini recipe generation error: {e}")
         return {"error": str(e), "recipes": []}
+
+
+async def handle_search_recipe_by_name(recipe_name: str) -> dict:
+    """Fetch a standard recipe by name and load it directly into the session."""
+    print(f"\n  🔧 search_recipe_by_name called with: {recipe_name}")
+
+    try:
+        recipe = await fetch_recipe_by_name(recipe_name)
+        if not recipe or not recipe.get("steps"):
+            return {"error": f"Could not find a recipe for '{recipe_name}'. Try a different name."}
+
+        # Store in session (both as recipe list and immediately as active)
+        session_state["recipes"] = [recipe]
+        session_state["active_recipe"] = recipe
+
+        # Push directly to sidebar — no picker needed
+        session_state["pending_ui_commands"].append({
+            "type": "recipe_selected",
+            "recipe": recipe
+        })
+
+        # Also cache to Firestore
+        already_saved = await recipe_exists(str(recipe["id"]))
+        if not already_saved:
+            await save_recipe(recipe)
+
+        print(f"  ✓ Loaded recipe by name: {recipe['name']} ({len(recipe['steps'])} steps)")
+        step_count = len(recipe["steps"])
+        return {
+            "recipe_id": recipe["id"],
+            "name": recipe["name"],
+            "step_count": step_count,
+            "message": f"Found '{recipe['name']}' with {step_count} steps. It's now showing on screen."
+        }
+
+    except Exception as e:
+        print(f"  ✗ search_recipe_by_name error: {e}")
+        return {"error": str(e)}
 
 
 async def handle_set_cooking_timer(name: str, minutes: int) -> dict:
@@ -514,9 +596,9 @@ async def handle_list_all_timers() -> dict:
         return {"error": str(e), "timers": []}
 
 
-async def handle_ui_command(action: str, recipe_id: int = None, timer_id: str = None) -> dict:
+async def handle_ui_command(action: str, recipe_id: int = None, timer_id: str = None, step_number: int = None) -> dict:
     """Handle UI commands from Gemini to control the frontend."""
-    print(f"\n  🎛️ ui_command called: action={action}, recipe_id={recipe_id}, timer_id={timer_id}")
+    print(f"\n  🎛️ ui_command called: action={action}, recipe_id={recipe_id}, timer_id={timer_id}, step_number={step_number}")
 
     if action == "select_recipe" and recipe_id is not None:
         recipe = set_active_recipe(recipe_id)
@@ -536,6 +618,8 @@ async def handle_ui_command(action: str, recipe_id: int = None, timer_id: str = 
         }
         if timer_id:
             cmd["timer_id"] = timer_id
+        if step_number is not None:
+            cmd["step_number"] = step_number
             
         session_state["pending_ui_commands"].append(cmd)
         return {"status": "ok", "action": action}
@@ -545,6 +629,7 @@ async def handle_ui_command(action: str, recipe_id: int = None, timer_id: str = 
 
 TOOL_HANDLERS = {
     "search_recipes": handle_search_recipes,
+    "search_recipe_by_name": handle_search_recipe_by_name,
     "set_cooking_timer": handle_set_cooking_timer,
     "start_timer": handle_start_timer,
     "pause_timer": handle_pause_timer,

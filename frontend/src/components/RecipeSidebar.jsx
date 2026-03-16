@@ -39,10 +39,22 @@ export function RecipeSidebar({ recipeName, difficulty, time, steps, identifiedI
     touchEndY.current = 0;
   };
 
-  // Auto-scroll to next active step — pin it to the top of the container
+  // Auto-scroll to the active step only on user-initiated step changes,
+  // NOT on every re-render. This lets users freely scroll to completed steps.
+  const lastScrolledStep = useRef(null);
+
   useEffect(() => {
-    if (activeStepRef.current) {
-      activeStepRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    const activeNum = steps?.find(s => s.active)?.num;
+    if (activeNum && activeNum !== lastScrolledStep.current) {
+      lastScrolledStep.current = activeNum;
+      // Small delay so DOM updates first, then scroll the element into view.
+      // 'nearest' is non-aggressive: only scrolls if out of view, by the minimum
+      // amount needed — so users can freely scroll up between step completions.
+      setTimeout(() => {
+        if (activeStepRef.current) {
+          activeStepRef.current.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
+      }, 150);
     }
   }, [steps]);
 
@@ -56,16 +68,15 @@ export function RecipeSidebar({ recipeName, difficulty, time, steps, identifiedI
 
   // Calculate remaining ingredients
   const allDone = steps?.every(s => s.done) || false;
-  let displayIngredients = identifiedIngredients;
+  let displayIngredients = identifiedIngredients || [];
   
-  if (!allDone && steps && identifiedIngredients) {
+  if (!allDone && steps && identifiedIngredients?.length > 0) {
     const futureIngredients = new Set();
     steps.forEach(s => {
       if (!s.done && s.ingredients) {
         s.ingredients.forEach(i => futureIngredients.add(i));
       }
     });
-    
     const hasIngredientData = steps.some(s => s.ingredients?.length > 0);
     if (hasIngredientData) {
       displayIngredients = identifiedIngredients.filter(i => futureIngredients.has(i));
@@ -155,7 +166,7 @@ export function RecipeSidebar({ recipeName, difficulty, time, steps, identifiedI
               <div 
                 key={step.num} 
                 ref={step.num === scrollTargetNum ? activeStepRef : null}
-                onClick={() => !step.done && onStepClick?.(step.num)}
+                onClick={() => step.active && onStepClick?.(step.num)}
                 className={`step-card relative ${!step.done ? 'cursor-pointer hover:brightness-110' : ''} ${step.active ? 'active scale-[1.02] shadow-lg border-accent-color/30' : ''} ${step.done ? 'border-emerald-500/20 bg-emerald-500/5' : ''}`}
               >
                 {step.active && (
@@ -176,17 +187,35 @@ export function RecipeSidebar({ recipeName, difficulty, time, steps, identifiedI
           </div>
         </div>
 
-        {/* Ingredients - always visible, pinned below steps */}
+        {/* Ingredients — capped at ~25% of the combined area, vertical scroll if overflow */}
         {displayIngredients?.length > 0 && (
-          <div style={{ flexShrink: 0, paddingTop: '12px', paddingBottom: '8px', borderTop: '1px solid rgba(255,255,255,0.05)' }}>
-            <h3 className="text-xs uppercase tracking-wider text-slate-400 mb-2 font-semibold">Identified ({displayIngredients.length})</h3>
-            <div className="flex flex-wrap gap-2">
+          <div style={{
+            flexShrink: 0,
+            paddingTop: '10px',
+            paddingBottom: '6px',
+            borderTop: '1px solid rgba(255,255,255,0.05)',
+          }}>
+            <h3 className="text-xs uppercase tracking-wider text-slate-400 mb-2 font-semibold">
+              Identified ({displayIngredients.length})
+            </h3>
+            <div
+              className="custom-scrollbar"
+              style={{
+                display: 'flex',
+                flexWrap: 'wrap',
+                gap: '8px',
+                maxHeight: '90px',
+                overflowY: 'auto',
+                paddingRight: '4px',
+                paddingBottom: '4px',
+              }}
+            >
               {displayIngredients.map(ing => (
-                <span 
-                  key={ing} 
-                  className="ingredient-tag px-3 py-1.5 rounded-full text-xs font-medium bg-slate-800/80 border border-slate-700/50 text-slate-200 shadow-sm backdrop-blur-md flex items-center gap-2"
+                <span
+                  key={ing}
+                  className="ingredient-tag flex-shrink-0 px-3 py-1.5 rounded-full text-xs font-medium bg-slate-800/80 border border-slate-700/50 text-slate-200 shadow-sm backdrop-blur-md flex items-center gap-2"
                 >
-                  <div className="w-1.5 h-1.5 rounded-full bg-emerald-400/80"></div>
+                  <div className="w-1.5 h-1.5 rounded-full bg-emerald-400/80 flex-shrink-0"></div>
                   {ing}
                 </span>
               ))}

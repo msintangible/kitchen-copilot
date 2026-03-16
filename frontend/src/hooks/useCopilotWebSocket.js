@@ -87,7 +87,15 @@ export function useCopilotWebSocket(url) {
               const action = data.action;
               if (action === 'show_sidebar') setSidebarVisible(true);
               else if (action === 'hide_sidebar') setSidebarVisible(false);
-              else if (action === 'step_done') setCurrentStep(prev => prev + 1);
+              else if (action === 'step_done') {
+                if (data.step_number !== undefined && data.step_number !== null) {
+                  // Gemini specified a step number — jump to that step (marking it + all before it as done)
+                  setCurrentStep(data.step_number);
+                } else {
+                  // No step specified — just advance to next
+                  setCurrentStep(prev => prev + 1);
+                }
+              }
               
               if (uiCommandCallbackRef.current) {
                 uiCommandCallbackRef.current(data);

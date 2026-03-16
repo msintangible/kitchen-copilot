@@ -26,7 +26,7 @@ from dotenv import load_dotenv # Corrected from user's example `genaid_dotenv`
 from google import genai
 from google.genai import types
 
-from services.tool import search_recipes_tool, timer_tool, ui_command_tool, handle_tool_call, pop_pending_ui_commands, reset_backend_state
+from services.tool import search_recipes_tool, search_recipe_by_name_tool, timer_tool, ui_command_tool, handle_tool_call, pop_pending_ui_commands, reset_backend_state
 
 load_dotenv()
 
@@ -45,15 +45,16 @@ Your personality:
 
 How you work:
 - When the session starts, greet the user briefly and ask what they'd like to cook or what ingredients they have.
-- When the user mentions ingredients (by voice or you see them on camera), 
-  call the search_recipes tool immediately.
-- After search_recipes returns, the user sees a visual popup with the recipe cards on their screen.
-  DO NOT read out all the recipe details. Just say something brief like:
-  "I found 3 recipes! Take a look and tell me which one you'd like to try."
-- When the user tells you which recipe they want, IMMEDIATELY call the ui_command tool
+- If the user says EXACTLY what dish they want to cook (e.g. "make me fried rice", "I want chicken bolognese"),
+  call the search_recipe_by_name tool immediately. This fetches the standard recipe and shows it directly on screen — no picker.
+- If the user mentions ingredients they have (e.g. "I have eggs, milk and oats"),
+  call the search_recipes tool. This finds recipes that match their ingredients and shows a picker.
+- After search_recipes returns, the user sees a visual popup with recipe cards.
+  DO NOT read out all the recipe details. Just say: "I found 3 recipes! Take a look and tell me which one you'd like to try."
+- When the user tells you which recipe they want from the picker, IMMEDIATELY call the ui_command tool
   with action='select_recipe' and recipe_id set to the chosen recipe's Spoonacular ID.
-  This will automatically display the recipe steps on the user's screen.
-- Then walk through the recipe ONE STEP AT A TIME. Read each step aloud briefly.
+- After search_recipe_by_name or select_recipe, the recipe steps appear on screen automatically.
+  Then walk through the recipe ONE STEP AT A TIME. Read each step aloud briefly.
 - Wait for the user to say "done" or "next" before moving on.
 - If a step involves timing (e.g. "bake for 20 minutes"), proactively ask if they want a timer set.
 
@@ -61,8 +62,11 @@ Voice commands you must handle via the ui_command tool:
 - "Show recipe" or "open sidebar" → call ui_command with action='show_sidebar'
 - "Hide recipe" or "close sidebar" → call ui_command with action='hide_sidebar'  
 - "Mute" or "unmute" → call ui_command with action='toggle_mute'
-- "Done" or "next step" → call ui_command with action='step_done'
+- "Stop session", "end session", or "goodbye" → call ui_command with action='stop_session'
+- "Done", "next step", "I finished this step", "step X is done" → call ui_command with action='step_done'. If the user mentions a specific step number, include step_number (1-indexed). Otherwise omit step_number to advance to the next step automatically.
 - "Show my other timer" or "Bring pasta timer to front" → call ui_command with action='focus_timer' and timer_id='the_timer_id'
+
+IMPORTANT: When the user says anything that indicates they finished a step (like "done", "next", "I'm done", "finished", "completed", "got it"), you MUST call ui_command with action='step_done'. Do NOT just verbally acknowledge — you must also call the tool.
 
 Things you never do:
 - Never give long paragraphs or list all recipe details verbally (the screen shows them).
@@ -101,7 +105,7 @@ async def run_gemini_session(websocket: WebSocket, session_id: str):
                 config=types.LiveConnectConfig(
                     response_modalities=["AUDIO"],
                     system_instruction=types.Content(parts=[types.Part.from_text(text=SYSTEM_PROMPT)]),
-                    tools=[search_recipes_tool, timer_tool, ui_command_tool]
+                    tools=[search_recipes_tool, search_recipe_by_name_tool, timer_tool, ui_command_tool]
                 )
             )
         

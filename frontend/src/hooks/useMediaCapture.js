@@ -24,8 +24,8 @@ export function useMediaCapture() {
       // The Gemini Live API expects 16kHz PCM audio, we will handle that downsampling elsewhere.
       const mediaStream = await navigator.mediaDevices.getUserMedia({
         video: {
-          width: { ideal: 640 },
-          height: { ideal: 480 },
+          width: { ideal: 1920 },
+          height: { ideal: 1080 },
           facingMode: "environment" // Prefer back camera on mobile (kitchen context)
         },
         audio: {
@@ -110,7 +110,7 @@ export function useMediaCapture() {
     if (isCapturing && videoRef.current) {
       const canvas = document.createElement('canvas');
       canvas.width = 640;
-      canvas.height = 480;
+      canvas.height = 360;
       const ctx = canvas.getContext('2d');
 
       intervalId = setInterval(() => {
