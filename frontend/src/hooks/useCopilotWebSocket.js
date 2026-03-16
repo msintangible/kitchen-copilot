@@ -74,8 +74,10 @@ export function useCopilotWebSocket(url) {
             
             // Route by message type
             if (data.type === 'recipe_results') {
-              // Recipe picker results from Spoonacular
+              // Recipe picker results
               setRecipes(data.recipes || []);
+              setActiveRecipe(null); // Ensure old recipes are cleared so the picker displays
+              setSidebarVisible(false);
             } else if (data.type === 'recipe_selected') {
               // User picked a recipe — show sidebar
               setActiveRecipe(data.recipe);
@@ -95,6 +97,9 @@ export function useCopilotWebSocket(url) {
                   // No step specified — just advance to next
                   setCurrentStep(prev => prev + 1);
                 }
+              } else if (action === 'all_steps_done') {
+                // Trigger sequential completion in UI command callback
+                // Handled in App.jsx via pop_pending_ui_commands? No, handled via this callback.
               }
               
               if (uiCommandCallbackRef.current) {

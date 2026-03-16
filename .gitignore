@@ -22,3 +22,8 @@ venv/
 Thumbs.db
 # Ignore Project Plan
 Kitchen Copilot Project Plan.md
+
+# User Exclusions
+HACKATHON.md
+backend/backend_debug.txt
+frontend/.firebase/

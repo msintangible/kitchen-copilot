@@ -5,16 +5,19 @@ from google import genai
 from google.genai import types
 
 
-# Firestore is optional — app works without it (recipes won't be cached)
+# Firestore is optional - app works without it (recipes won't be cached)
 try:
-    from backend.db.firestore_client import save_recipe, recipe_exists
+    from backend.db.firestore_client import save_recipe, recipe_exists, get_cached_search, save_cached_search, get_recipe_by_id
 except (ModuleNotFoundError, ImportError):
     try:
-        from db.firestore_client import save_recipe, recipe_exists
+        from db.firestore_client import save_recipe, recipe_exists, get_cached_search, save_cached_search, get_recipe_by_id
     except (ModuleNotFoundError, ImportError):
         async def save_recipe(*a, **kw): pass
         async def recipe_exists(*a, **kw): return False
-        print("  ⚠ Firestore not available — recipes won't be cached")
+        async def get_cached_search(*a, **kw): return None
+        async def save_cached_search(*a, **kw): pass
+        async def get_recipe_by_id(*a, **kw): return None
+        print("  ! Firestore not available - recipes won't be cached")
 
 # Timer manager
 try:
@@ -26,8 +29,6 @@ load_dotenv()
 
 
 client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
-SPOONACULAR_KEY = os.getenv("SPOONACULAR_API_KEY")
-SPOONACULAR_BASE = "https://api.spoonacular.com"
 
 
 # ── Session State (shared across tool calls within a session) ─────
@@ -47,7 +48,7 @@ def get_active_recipe():
     return session_state["active_recipe"]
 
 def set_active_recipe(recipe_id: int):
-    """Set the active recipe by its Spoonacular ID."""
+    """Set the active recipe by its ID."""
     for r in session_state["recipes"]:
         if r["id"] == recipe_id:
             session_state["active_recipe"] = r
@@ -77,7 +78,7 @@ def reset_backend_state():
 async def fetch_recipe_by_name(recipe_name: str) -> dict:
     """
     Use Gemini to generate a clean, simple, classic version of a recipe by name.
-    Much better than Spoonacular for name-based searches — Gemini gives standard
+    Much better than generic search - Gemini gives standard
     home-cooking recipes, not overcomplicated restaurant versions.
     """
     import json
@@ -86,7 +87,7 @@ async def fetch_recipe_by_name(recipe_name: str) -> dict:
     prompt = f"""You are a practical home-cooking assistant. Generate a simple, classic, straightforward recipe for "{recipe_name}".
 
 RULES:
-- This is a HOME COOKING recipe — keep it simple and accessible.
+- This is a HOME COOKING recipe - keep it simple and accessible.
 - Do NOT add exotic or unnecessary ingredients. Stick to the classic version.
 - Steps should be clear, numbered, and each step is ONE action.
 - Aim for 6-12 steps. Each step should be 1-2 sentences maximum.
@@ -297,20 +298,19 @@ ui_command_tool = types.Tool(
             name="ui_command",
             description=(
                 "Send a UI command to the frontend app. Use this when the user asks to "
-                "show or hide the recipe sidebar, mute/unmute their microphone, or mark "
-                "the current cooking step as done. Valid actions: "
-                "'show_sidebar', 'hide_sidebar', 'toggle_mute', 'step_done', 'select_recipe', 'stop_session'."
+                "the current cooking step as done, or complete all steps at once. Valid actions: "
+                "'show_sidebar', 'hide_sidebar', 'toggle_mute', 'step_done', 'all_steps_done', 'select_recipe', 'stop_session'."
             ),
             parameters=types.Schema(
                 type=types.Type.OBJECT,
                 properties={
                     "action": types.Schema(
                         type=types.Type.STRING,
-                        description="The UI action to perform: 'show_sidebar', 'hide_sidebar', 'toggle_mute', 'step_done', 'select_recipe', 'focus_timer', or 'stop_session'"
+                        description="The UI action to perform: 'show_sidebar', 'hide_sidebar', 'toggle_mute', 'step_done', 'all_steps_done', 'select_recipe', 'focus_timer', or 'stop_session'"
                     ),
                     "recipe_id": types.Schema(
                         type=types.Type.INTEGER,
-                        description="The Spoonacular recipe ID, only needed when action is 'select_recipe'"
+                        description="The recipe ID, only needed when action is 'select_recipe'"
                     ),
                     "timer_id": types.Schema(
                         type=types.Type.STRING,
@@ -332,7 +332,28 @@ ui_command_tool = types.Tool(
 
 async def handle_search_recipes(ingredients: list) -> dict:
     """Use Gemini to suggest 3 practical recipes based on available ingredients."""
+    # Ensure Gemini didn't pass a single string comma-separated list
+    if isinstance(ingredients, str):
+        ingredients = [i.strip() for i in ingredients.split(',')]
+
     print(f"\n  🔧 search_recipes called with: {ingredients}")
+
+    # ── CHECK FIRESTORE CACHE FIRST (with timeout so it never blocks) ──
+    try:
+        import asyncio
+        cached_recipes = await asyncio.wait_for(get_cached_search(ingredients), timeout=3.0)
+    except Exception:
+        cached_recipes = None
+
+    if cached_recipes:
+        session_state["recipes"] = cached_recipes
+        session_state["pending_ui_commands"].append({
+            "type": "recipe_results",
+            "recipes": cached_recipes
+        })
+        print(f"  ✓ Loaded {len(cached_recipes)} recipes instantly from Firestore cache")
+        return {"recipes": cached_recipes}
+
     import json, hashlib
 
     ingredients_list = ", ".join(ingredients)
@@ -342,13 +363,13 @@ async def handle_search_recipes(ingredients: list) -> dict:
 Suggest exactly 3 simple, home-cooking recipes they could make. Prioritise recipes that use MOST of the listed ingredients.
 
 RULES:
-- Keep recipes simple and classic (e.g. fried rice, omelette, pasta) — not gourmet versions.
+- Keep recipes simple and classic (e.g. fried rice, omelette, pasta) - not gourmet versions.
 - Steps should be clear, each step ONE action, 1-2 sentences max. Aim for 6-10 steps.
 - All ingredient amounts must have measurements ("2 cups", "400g", "1 tablespoon").
 - estimated_time: realistic total cook + prep time as a short string like "15 min" or "30 min".
 - needs_count: how many EXTRA ingredients (not in the user's list) the recipe requires. Integer.
 
-Return ONLY valid JSON — no markdown, no extra text:
+Return ONLY valid JSON - no markdown, no extra text:
 {{
   "recipes": [
     {{
@@ -395,15 +416,25 @@ Return ONLY valid JSON — no markdown, no extra text:
             }
             recipes.append(formatted)
 
-            already_saved = await recipe_exists(str(stable_id))
-            if not already_saved:
-                await save_recipe(formatted)
+            try:
+                already_saved = await asyncio.wait_for(recipe_exists(str(stable_id)), timeout=3.0)
+                if not already_saved:
+                    await asyncio.wait_for(save_recipe(formatted), timeout=3.0)
+            except Exception:
+                pass  # Firestore unavailable, skip silently
 
         session_state["recipes"] = recipes
         session_state["pending_ui_commands"].append({
             "type": "recipe_results",
             "recipes": recipes
         })
+
+        # Cache the entire search result for future users (fire-and-forget)
+        try:
+            import asyncio
+            await asyncio.wait_for(save_cached_search(ingredients, recipes), timeout=3.0)
+        except Exception:
+            print("  ! Cache save skipped (Firestore unavailable)")
 
         print(f"  ✓ Generated {len(recipes)} recipes via Gemini")
         return {"recipes": recipes}
@@ -416,26 +447,42 @@ Return ONLY valid JSON — no markdown, no extra text:
 async def handle_search_recipe_by_name(recipe_name: str) -> dict:
     """Fetch a standard recipe by name and load it directly into the session."""
     print(f"\n  🔧 search_recipe_by_name called with: {recipe_name}")
+    import hashlib
 
     try:
-        recipe = await fetch_recipe_by_name(recipe_name)
-        if not recipe or not recipe.get("steps"):
-            return {"error": f"Could not find a recipe for '{recipe_name}'. Try a different name."}
+        # Determine the stable ID before fetching to check cache
+        stable_id = int(hashlib.md5(recipe_name.lower().encode()).hexdigest()[:8], 16)
+        
+        # ── CHECK FIRESTORE CACHE FIRST (with timeout) ──
+        try:
+            import asyncio
+            recipe = await asyncio.wait_for(get_recipe_by_id(str(stable_id)), timeout=3.0)
+        except Exception:
+            recipe = None
+        
+        if not recipe:
+            # Not in cache, fetch it via Gemini
+            recipe = await fetch_recipe_by_name(recipe_name)
+            if not recipe or not recipe.get("steps"):
+                return {"error": f"Could not find a recipe for '{recipe_name}'. Try a different name."}
+            
+            # Cache it (fire-and-forget)
+            try:
+                await asyncio.wait_for(save_recipe(recipe), timeout=3.0)
+            except Exception:
+                pass
+        else:
+            print(f"  ✓ Loaded recipe '{recipe_name}' instantly from Firestore cache")
 
         # Store in session (both as recipe list and immediately as active)
         session_state["recipes"] = [recipe]
         session_state["active_recipe"] = recipe
 
-        # Push directly to sidebar — no picker needed
+        # Push directly to sidebar - no picker needed
         session_state["pending_ui_commands"].append({
             "type": "recipe_selected",
             "recipe": recipe
         })
-
-        # Also cache to Firestore
-        already_saved = await recipe_exists(str(recipe["id"]))
-        if not already_saved:
-            await save_recipe(recipe)
 
         print(f"  ✓ Loaded recipe by name: {recipe['name']} ({len(recipe['steps'])} steps)")
         step_count = len(recipe["steps"])
@@ -453,6 +500,12 @@ async def handle_search_recipe_by_name(recipe_name: str) -> dict:
 
 async def handle_set_cooking_timer(name: str, minutes: int) -> dict:
     """Create a new cooking timer"""
+    # Force cast to float to prevent python string multiplication ("10" * 60 = "101010...")
+    try:
+        minutes = float(minutes)
+    except (ValueError, TypeError):
+        minutes = 1.0
+
     print(f"\n  ⏰ set_cooking_timer called: '{name}' for {minutes} minutes")
 
     def timer_complete_callback(timer):

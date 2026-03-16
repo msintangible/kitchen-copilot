@@ -19,10 +19,9 @@ Kitchen Copilot is built with a decoupled architecture: a FastAPI backend and a 
    ```bash
    pip install -r requirements.txt
    ```
-3. Create a `.env` file in the `backend/` directory (or project root) and add your API keys:
+3. Create a `.env` file in the `backend/` directory (or project root) and add your API key:
    ```env
    GEMINI_API_KEY=your_gemini_api_key_here
-   SPOONACULAR_API_KEY=your_spoonacular_api_key_here
    ```
 4. Start the FastAPI WebSocket server:
    ```bash
@@ -112,15 +111,17 @@ Kitchen Copilot: You have 1 active timer.
 - **`main.py`**: Main chat interface with Gemini AI integration
 - **`tool.py`**: Tool definitions and handlers for recipes and timers
 - **`timer.py`**: Timer management system with async support
-- **`.env`**: Environment variables for API keys
+- **`.env`**: Environment variables for API key and Project configuration
+- **Firestore**: NoSQL database for recipe caching and search history
 
 ## API Integrations
 
-- **Google Gemini**: AI chat and tool calling
-- **Spoonacular**: Recipe search and ingredient matching
+- **Google Gemini 2.5 Flash Native Audio**: Multimodal Live API for real-time voice, video, and tool calling
+- **Google Gemini 2.5 Flash**: Recipe search and step sanitization via text generation
+- **Google Cloud Firestore**: Scalable NoSQL database for persistent recipe storage and global search caching
 
 ## Requirements
 
 - Python 3.8+
-- Valid API keys for Gemini and Spoonacular
+- Valid API key for Gemini
 - Asyncio support for concurrent timer management

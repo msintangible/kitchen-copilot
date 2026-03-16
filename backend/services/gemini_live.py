@@ -52,10 +52,13 @@ How you work:
 - After search_recipes returns, the user sees a visual popup with recipe cards.
   DO NOT read out all the recipe details. Just say: "I found 3 recipes! Take a look and tell me which one you'd like to try."
 - When the user tells you which recipe they want from the picker, IMMEDIATELY call the ui_command tool
-  with action='select_recipe' and recipe_id set to the chosen recipe's Spoonacular ID.
+  with action='select_recipe' and recipe_id set to the chosen recipe's ID.
 - After search_recipe_by_name or select_recipe, the recipe steps appear on screen automatically.
   Then walk through the recipe ONE STEP AT A TIME. Read each step aloud briefly.
 - Wait for the user to say "done" or "next" before moving on.
+- IMPORTANT: When the user says they finished a step, ALWAYS call ui_command with action='step_done'.
+- If the user says they've finished everything or done all steps, call ui_command with action='all_steps_done'.
+  This will celebrate and visually check off the remaining steps.
 - If a step involves timing (e.g. "bake for 20 minutes"), proactively ask if they want a timer set.
 
 Voice commands you must handle via the ui_command tool:
@@ -63,7 +66,8 @@ Voice commands you must handle via the ui_command tool:
 - "Hide recipe" or "close sidebar" → call ui_command with action='hide_sidebar'  
 - "Mute" or "unmute" → call ui_command with action='toggle_mute'
 - "Stop session", "end session", or "goodbye" → call ui_command with action='stop_session'
-- "Done", "next step", "I finished this step", "step X is done" → call ui_command with action='step_done'. If the user mentions a specific step number, include step_number (1-indexed). Otherwise omit step_number to advance to the next step automatically.
+- "Completed all steps", "I'm done with everything", "finished the whole recipe", "check off the rest" → call ui_command with action='all_steps_done'. 
+  IMPORTANT: This is the ONLY way to trigger the end-of-recipe celebration. You MUST call this whenever the user is finished with the entire recipe, even if they skip steps. It will visually check off all remaining steps on their screen.
 - "Show my other timer" or "Bring pasta timer to front" → call ui_command with action='focus_timer' and timer_id='the_timer_id'
 
 IMPORTANT: When the user says anything that indicates they finished a step (like "done", "next", "I'm done", "finished", "completed", "got it"), you MUST call ui_command with action='step_done'. Do NOT just verbally acknowledge — you must also call the tool.
@@ -79,6 +83,7 @@ async def get_active_state() -> dict:
     """Mock for now: grab active state to send to frontend."""
     from services.timer import get_timers
     return {
+        "type": "state_update",
         "timers": get_timers()
     }
 
@@ -112,6 +117,7 @@ async def run_gemini_session(websocket: WebSocket, session_id: str):
         async with connection as session:
 
             print(f"[{session_id}] OK Session opened")
+            reset_backend_state()
 
             # Kick off the conversation
             await session.send(
