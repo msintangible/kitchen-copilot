@@ -132,24 +132,24 @@ export function RecipeSidebar({ recipeName, difficulty, time, steps, identifiedI
         {/* Header - fixed at top */}
         <div style={{ flexShrink: 0 }} className="p-1 desktop-p-0">
           <div className="flex items-center justify-between">
-            <h2 className="text-xl font-semibold tracking-tight" style={{ flex: 1 }}>{recipeName}</h2>
+            <h2 className="text-lg sm:text-xl font-semibold tracking-tight line-clamp-1" style={{ flex: 1 }}>{recipeName}</h2>
             {onClose && (
               <button 
                 onClick={(e) => { e.stopPropagation(); onClose(); }} 
                 className="btn-icon" 
-                style={{ width: 44, height: 44, flexShrink: 0 }}
+                style={{ width: 40, height: 40, flexShrink: 0 }}
                 title="Close sidebar"
               >
-                <X size={20} />
+                <X size={18} />
               </button>
             )}
           </div>
-          <p className="mt-1.5 text-[0.9rem]" style={{ marginBottom: '16px' }}>
+          <p className="mt-1 text-[0.85rem] sm:text-[0.9rem]" style={{ marginBottom: '12px' }}>
             <span className={`${difficultyColor} font-medium`}>{difficulty}</span> 
-            <span className="text-slate-500 mx-2">•</span> 
+            <span className="text-slate-500 mx-1.5">•</span> 
             <span className="text-slate-300 font-medium">{time}</span>
           </p>
-          <h3 className="text-xs uppercase tracking-wider text-slate-400 mb-3 font-semibold">Steps</h3>
+          <h3 className="text-[10px] sm:text-xs uppercase tracking-wider text-slate-400 mb-2 font-semibold">Steps</h3>
         </div>
 
         {/* Steps - scrollable, fills remaining space */}

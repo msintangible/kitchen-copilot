@@ -64,7 +64,7 @@ export function RecipePicker({ recipes, onSelect, onClose }) {
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
-                  fontSize: '3rem',
+                  fontSize: '2.5rem', // Slightly smaller default
                   userSelect: 'none',
                 }}
               >

@@ -708,6 +708,72 @@
     padding: 10px 16px;
     font-size: 0.9rem;
   }
+
+  /* ── Extra-Small Mobile Adjustments (<380px) ─────────────────── */
+  @media (max-width: 380px) {
+    .hud-top {
+      top: 12px;
+      left: 12px;
+      right: 12px;
+      gap: 8px;
+    }
+    
+    .status-pill {
+      padding: 4px 10px;
+      font-size: 0.75rem;
+    }
+
+    .glass-pill.px-4.py-2 {
+      padding: 6px 12px !important;
+      font-size: 0.75rem;
+    }
+
+    .timers-container {
+      top: 60px;
+      left: 12px;
+    }
+
+    .timer-widget {
+      width: 220px;
+      padding: 12px 16px;
+      height: 70px;
+    }
+
+    .timer-time {
+      font-size: 1.2rem;
+    }
+
+    .controls-dock {
+      padding: 8px 16px;
+      gap: 12px;
+      width: calc(100% - 32px);
+      justify-content: center;
+    }
+
+    .btn {
+      padding: 8px 12px;
+      font-size: 0.85rem;
+      gap: 6px;
+    }
+
+    .btn-icon {
+      width: 42px;
+      height: 42px;
+    }
+
+    .recipe-sidebar {
+      width: calc(100% - 24px);
+      right: 12px;
+    }
+
+    .recipe-picker-panel {
+      padding: 16px 12px;
+    }
+
+    .recipe-card-image {
+      height: 100px;
+    }
+  }
 }
 
 /* ── Landscape Mobile Optimizations ─────────────────────────────────── */

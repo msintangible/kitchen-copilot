@@ -27,8 +27,8 @@ const COMMAND_HINTS = [
   '"Stop session"',
 ];
 
-const INACTIVITY_TIMEOUT_MS = 15 * 60 * 1000; // 15 minutes
-const RECIPE_COMPLETE_COUNTDOWN = 15; // seconds
+const INACTIVITY_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
+const RECIPE_COMPLETE_COUNTDOWN = 60; // seconds
 
 function App() {
   const { videoRef, isCapturing, isMuted, startCapture, stopCapture, toggleMute } = useMediaCapture();
@@ -49,7 +49,22 @@ function App() {
   
   const [isActive, setIsActive] = useState(false);
   const [focusedTimerId, setFocusedTimerId] = useState(null);
+  const [targetStep, setTargetStep] = useState(null);
   
+  // Sequential step check-off effect
+  useEffect(() => {
+    if (targetStep === null || !isActive) return;
+    if (currentStep < targetStep) {
+      const timer = setTimeout(() => {
+        setCurrentStep(prev => prev + 1);
+      }, 400); // Clean 400ms pace
+      return () => clearTimeout(timer);
+    } else {
+      // Animation finished!
+      setTargetStep(null);
+    }
+  }, [currentStep, targetStep, isActive, setCurrentStep]);
+
   // Rotating hint state
   const [hintIndex, setHintIndex] = useState(0);
   const [hintVisible, setHintVisible] = useState(true);
@@ -69,6 +84,7 @@ function App() {
   // Register generic UI command callback so voice commands work
   useEffect(() => {
     uiCommandCallbackRef.current = (command) => {
+      console.log("Frontend received UI command:", command.action, command);
       if (command.action === 'toggle_mute') toggleMute();
       if (command.action === 'focus_timer' && command.timer_id) {
         setFocusedTimerId(command.timer_id);
@@ -76,8 +92,13 @@ function App() {
       if (command.action === 'stop_session') {
         setShowEndSessionConfirm(true);
       }
+      if (command.action === 'all_steps_done' && activeRecipe) {
+        const total = activeRecipe.steps.length;
+        console.log(`Setting target step: ${total}`);
+        setTargetStep(total);
+      }
     };
-  }, [toggleMute, uiCommandCallbackRef, stopCapture, disconnect]);
+  }, [toggleMute, uiCommandCallbackRef, activeRecipe]);
 
   // Build steps array from active recipe
   const activeSteps = activeRecipe?.steps?.map((text, i) => ({
@@ -150,16 +171,17 @@ function App() {
   const completionTriggered = useRef(false);
 
   useEffect(() => {
-    if (allStepsDone && isActive && !completionTriggered.current) {
+    // Only trigger celebration if all steps are done and AFTER any sequential animation finishes
+    if (allStepsDone && isActive && !completionTriggered.current && targetStep === null) {
       completionTriggered.current = true;
-      sendMessage({ clientContent: "System: The user has completed all recipe steps. Congratulate them briefly and let them know the session will end in 15 seconds unless they want to continue." });
+      sendMessage({ clientContent: `System: The user has completed all recipe steps. Congratulate them briefly and let them know the session will end in ${RECIPE_COMPLETE_COUNTDOWN} seconds unless they want to continue.` });
       setCompletionCountdown(RECIPE_COMPLETE_COUNTDOWN);
     }
     if (!allStepsDone) {
       completionTriggered.current = false;
       setCompletionCountdown(null);
     }
-  }, [allStepsDone, isActive]);
+  }, [allStepsDone, isActive, sendMessage, targetStep]);
 
   useEffect(() => {
     if (completionCountdown === null || completionCountdown < 0) return;
